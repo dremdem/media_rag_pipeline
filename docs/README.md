@@ -15,6 +15,7 @@
 ## Setup Guides
 
 - [QDRANT_LOCAL_SETUP.md](./QDRANT_LOCAL_SETUP.md) - Setting up Qdrant vector database locally in Docker
+- [OPENAI_EMBEDDINGS_SETUP.md](./OPENAI_EMBEDDINGS_SETUP.md) - Configuring OpenAI API for text embeddings
 
 ## Plans
 
