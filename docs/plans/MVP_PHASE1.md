@@ -243,7 +243,7 @@ def main():
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is not set")
 
-    query = os.environ.get("QUERY", "Find the last mentions of Plotnikov")
+    query = os.environ.get("QUERY", "What is Michael Harris's approach to leadership?")
     k = int(os.environ.get("TOP_K", "3"))
 
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
@@ -277,7 +277,7 @@ if __name__ == "__main__":
 Run query:
 
 ```
-export QUERY="Give me the last three opinions about Harris"
+export QUERY="What does Laura Bennett think about organizational change?"
 export TOP_K=3
 uv run python query.py
 ```
