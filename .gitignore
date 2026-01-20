@@ -1,4 +1,22 @@
+# Environment variables
 .env
 .env.local
 .env.*.local
-qdrant_storage
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Qdrant local storage
+qdrant_storage/
+
+# IDE
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,14 @@
+[project]
+name = "media-rag-pipeline"
+version = "0.1.0"
+description = "RAG pipeline for media transcripts using Qdrant and OpenAI embeddings"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain>=1.2.6",
+    "langchain-openai>=1.1.7",
+    "langchain-qdrant>=1.1.0",
+    "langchain-text-splitters>=1.1.0",
+    "python-dotenv>=1.2.1",
+    "qdrant-client>=1.16.2",
+]
