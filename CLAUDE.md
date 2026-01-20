@@ -26,6 +26,9 @@ cd backend && uv add <package>  # Auto-updates uv.lock
 
 ### Git Workflow
 - **NEVER push directly to master** - always use feature branches
+- **ALWAYS create a GitHub issue first** - every PR must be linked to an issue
+  - Multiple PRs can reference the same issue
+  - Use `Closes #<issue-number>` in PR description to auto-close on merge
 - Create PR for all changes
 
 
