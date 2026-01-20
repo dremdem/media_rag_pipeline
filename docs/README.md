@@ -14,6 +14,7 @@
 
 ## Setup Guides
 
+- [UV_PYTHON_SETUP.md](./UV_PYTHON_SETUP.md) - Python environment setup with uv package manager
 - [QDRANT_LOCAL_SETUP.md](./QDRANT_LOCAL_SETUP.md) - Setting up Qdrant vector database locally in Docker
 - [OPENAI_EMBEDDINGS_SETUP.md](./OPENAI_EMBEDDINGS_SETUP.md) - Configuring OpenAI API for text embeddings
 
