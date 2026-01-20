@@ -1,0 +1,13 @@
+log_level: INFO
+
+storage:
+  storage_path: /qdrant/storage
+
+  # Optimizer settings
+  optimizers:
+    default_segment_number: 2
+
+service:
+  http_port: 6333
+  grpc_port: 6334
+  enable_tls: false
