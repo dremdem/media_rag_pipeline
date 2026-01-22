@@ -108,12 +108,18 @@ export DEEPGRAM_API_KEY="your-key-here"
 
 ### Basic Usage
 
+**From YouTube URL:**
 ```bash
 uv run python src/transcribe.py "https://youtube.com/watch?v=VIDEO_ID"
 ```
 
+**From local audio file:**
+```bash
+uv run python src/transcribe.py --audio-file path/to/audio.mp3
+```
+
 This will:
-1. Download audio from the YouTube video
+1. Download audio from YouTube (or use local file)
 2. Transcribe using Deepgram (Russian language by default)
 3. Save JSON, SRT, and TXT files to `data/transcripts/`
 4. Keep the audio file
@@ -121,14 +127,15 @@ This will:
 ### Command-Line Options
 
 ```
-usage: transcribe.py [-h] [-l LANGUAGE] [-o OUTPUT_DIR] [--diarize]
-                     [--filler-words] [--delete-audio] url
+usage: transcribe.py [-h] [-a AUDIO_FILE] [-l LANGUAGE] [-o OUTPUT_DIR]
+                     [--diarize] [--filler-words] [--delete-audio] [url]
 
 positional arguments:
-  url                   YouTube video URL
+  url                   YouTube video URL (optional if --audio-file provided)
 
 options:
   -h, --help            show this help message and exit
+  -a, --audio-file      Path to local audio file (skip YouTube download)
   -l, --language        Language code (default: ru)
   -o, --output-dir      Output directory (default: data/transcripts)
   --diarize             Enable speaker diarization
@@ -166,6 +173,16 @@ uv run python src/transcribe.py "https://youtube.com/watch?v=VIDEO_ID" -o ./my_t
 **Short URL format:**
 ```bash
 uv run python src/transcribe.py "https://youtu.be/VIDEO_ID"
+```
+
+**From local audio file (already downloaded):**
+```bash
+uv run python src/transcribe.py --audio-file data/transcripts/x5wmGSAmUQA.mp3
+```
+
+**Local file with options:**
+```bash
+uv run python src/transcribe.py -a recording.wav --language en --diarize
 ```
 
 ---

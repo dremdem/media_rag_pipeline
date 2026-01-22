@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Transcribe YouTube videos using Deepgram API.
+"""Transcribe YouTube videos or local audio files using Deepgram API.
 
-This script downloads audio from a YouTube video, transcribes it using
-Deepgram's API, and saves the results as JSON, SRT, and plain text files.
+This script downloads audio from a YouTube video (or uses a local file),
+transcribes it using Deepgram's API, and saves the results as JSON, SRT,
+and plain text files.
 
 Usage:
+    # From YouTube URL
     uv run python src/transcribe.py "https://youtube.com/watch?v=VIDEO_ID"
     uv run python src/transcribe.py "https://youtube.com/watch?v=VIDEO_ID" --language en
-    uv run python src/transcribe.py "https://youtube.com/watch?v=VIDEO_ID" --diarize
+
+    # From local audio file
+    uv run python src/transcribe.py --audio-file path/to/audio.mp3
+    uv run python src/transcribe.py -a path/to/audio.mp3 --language en
 
 Environment Variables:
     DEEPGRAM_API_KEY: Required. Your Deepgram API key.
@@ -124,19 +129,29 @@ def transcribe_audio(
     with open(audio_path, "rb") as audio_file:
         audio_data = audio_file.read()
 
-    # Transcribe with options
-    response = client.listen.rest.v("1").transcribe_file(
-        {"buffer": audio_data, "mimetype": "audio/mp3"},
-        {
-            "model": "nova-3",
-            "language": language,
-            "smart_format": True,
-            "punctuate": True,
-            "paragraphs": True,
-            "utterances": True,  # Required for SRT generation
-            "filler_words": filler_words,
-            "diarize": diarize,
-        },
+    # Detect mimetype based on file extension
+    suffix = audio_path.suffix.lower()
+    mimetype_map = {
+        ".mp3": "audio/mp3",
+        ".wav": "audio/wav",
+        ".m4a": "audio/m4a",
+        ".ogg": "audio/ogg",
+        ".flac": "audio/flac",
+        ".webm": "audio/webm",
+    }
+    mimetype = mimetype_map.get(suffix, "audio/mp3")
+
+    # Transcribe with options using v1 API
+    response = client.listen.v1.media.transcribe_file(
+        request=audio_data,
+        model="nova-3",
+        language=language,
+        smart_format=True,
+        punctuate=True,
+        paragraphs=True,
+        utterances=True,  # Required for SRT generation
+        filler_words=filler_words,
+        diarize=diarize,
     )
 
     # Convert response to dict
@@ -201,25 +216,36 @@ def save_results(
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Transcribe YouTube videos using Deepgram API.",
+        description="Transcribe YouTube videos or local audio files using Deepgram API.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # From YouTube URL
   %(prog)s "https://youtube.com/watch?v=VIDEO_ID"
   %(prog)s "https://youtu.be/VIDEO_ID" --language en
-  %(prog)s "https://youtube.com/watch?v=VIDEO_ID" --diarize --delete-audio
+
+  # From local audio file
+  %(prog)s --audio-file path/to/audio.mp3
+  %(prog)s -a recording.wav --language en --diarize
 
 Environment:
   DEEPGRAM_API_KEY    Your Deepgram API key (required)
 
 Note:
-  ffmpeg must be installed for audio extraction.
+  ffmpeg must be installed for audio extraction from YouTube.
   Install with: brew install ffmpeg (macOS)
         """,
     )
     parser.add_argument(
         "url",
-        help="YouTube video URL",
+        nargs="?",
+        help="YouTube video URL (optional if --audio-file is provided)",
+    )
+    parser.add_argument(
+        "-a",
+        "--audio-file",
+        type=Path,
+        help="Path to local audio file (skip YouTube download)",
     )
     parser.add_argument(
         "-l",
@@ -261,20 +287,37 @@ def main() -> int:
         print("Please set it in your environment or .env file.", file=sys.stderr)
         return 1
 
-    # Extract video ID
-    video_id = extract_video_id(args.url)
-    if not video_id:
-        print(f"Error: Could not extract video ID from: {args.url}", file=sys.stderr)
+    # Validate inputs: need either URL or audio file
+    if not args.url and not args.audio_file:
+        print("Error: Must provide either a YouTube URL or --audio-file.", file=sys.stderr)
         return 1
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Step 1: Download audio
-        audio_path = download_audio(args.url, output_dir)
+        # Determine source: local file or YouTube
+        if args.audio_file:
+            # Use local audio file
+            audio_path = args.audio_file
+            if not audio_path.exists():
+                print(f"Error: Audio file not found: {audio_path}", file=sys.stderr)
+                return 1
+            # Use filename stem as the ID
+            file_id = audio_path.stem
+            print(f"Using local audio file: {audio_path}")
+            downloaded = False
+        else:
+            # Download from YouTube
+            video_id = extract_video_id(args.url)
+            if not video_id:
+                print(f"Error: Could not extract video ID from: {args.url}", file=sys.stderr)
+                return 1
+            audio_path = download_audio(args.url, output_dir)
+            file_id = video_id
+            downloaded = True
 
-        # Step 2: Transcribe
+        # Transcribe
         response = transcribe_audio(
             audio_path,
             language=args.language,
@@ -282,20 +325,20 @@ def main() -> int:
             filler_words=args.filler_words,
         )
 
-        # Step 3: Save results
-        json_path, srt_path, txt_path = save_results(response, output_dir, video_id)
+        # Save results
+        json_path, srt_path, txt_path = save_results(response, output_dir, file_id)
 
-        # Step 4: Optionally delete audio
-        if args.delete_audio:
+        # Optionally delete audio (only if downloaded)
+        if args.delete_audio and downloaded:
             audio_path.unlink()
             print(f"Audio deleted: {audio_path}")
 
         print("\nTranscription complete!")
-        print(f"  Video ID: {video_id}")
+        print(f"  ID: {file_id}")
         print(f"  JSON: {json_path}")
         print(f"  SRT: {srt_path}")
         print(f"  TXT: {txt_path}")
-        if not args.delete_audio:
+        if not args.delete_audio or not downloaded:
             print(f"  Audio: {audio_path}")
 
         return 0
