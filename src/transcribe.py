@@ -164,8 +164,25 @@ def transcribe_audio(
         diarize=diarize,
     )
 
-    # Convert response to dict
-    return response.to_dict()
+    # Convert response to dict - handle different SDK versions
+    if hasattr(response, "to_dict"):
+        return response.to_dict()
+    elif hasattr(response, "to_json"):
+        return json.loads(response.to_json())
+    elif hasattr(response, "model_dump"):
+        return response.model_dump()
+    elif hasattr(response, "result"):
+        # v1 API might wrap result
+        result = response.result
+        if hasattr(result, "to_dict"):
+            return result.to_dict()
+        elif hasattr(result, "to_json"):
+            return json.loads(result.to_json())
+    # Fallback: try to access as dict-like or use __dict__
+    try:
+        return dict(response)
+    except (TypeError, ValueError):
+        return response.__dict__
 
 
 def save_results(
