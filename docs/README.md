@@ -4,6 +4,7 @@
 
 - [Architecture](#architecture)
 - [Setup Guides](#setup-guides)
+- [Usage Guides](#usage-guides)
 - [Plans](#plans)
 
 ---
@@ -17,6 +18,10 @@
 - [UV_PYTHON_SETUP.md](./UV_PYTHON_SETUP.md) - Python environment setup with uv package manager
 - [QDRANT_LOCAL_SETUP.md](./QDRANT_LOCAL_SETUP.md) - Setting up Qdrant vector database locally in Docker
 - [OPENAI_EMBEDDINGS_SETUP.md](./OPENAI_EMBEDDINGS_SETUP.md) - Configuring OpenAI API for text embeddings
+
+## Usage Guides
+
+- [DEEPGRAM_TRANSCRIPTION.md](./DEEPGRAM_TRANSCRIPTION.md) - Transcribe YouTube videos using Deepgram API
 
 ## Plans
 
