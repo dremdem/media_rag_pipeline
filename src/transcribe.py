@@ -28,6 +28,7 @@ import re
 import sys
 from pathlib import Path
 
+import httpx
 import yt_dlp
 from deepgram import DeepgramClient
 from deepgram_captions import DeepgramConverter, srt
@@ -101,6 +102,7 @@ def transcribe_audio(
     language: str = DEFAULT_LANGUAGE,
     diarize: bool = False,
     filler_words: bool = False,
+    timeout: int = 600,
 ) -> dict:
     """Transcribe audio file using Deepgram API.
 
@@ -109,6 +111,7 @@ def transcribe_audio(
         language: Language code (e.g., 'ru', 'en')
         diarize: Enable speaker diarization
         filler_words: Include filler words like 'um', 'uh'
+        timeout: API timeout in seconds (default: 600 for large files)
 
     Returns:
         Deepgram API response as dictionary
@@ -119,10 +122,15 @@ def transcribe_audio(
             "Please set it in your environment or .env file."
         )
 
+    # Get file size for info
+    file_size_mb = audio_path.stat().st_size / (1024 * 1024)
+
     print(f"Transcribing: {audio_path}")
+    print(f"  File size: {file_size_mb:.1f} MB")
     print(f"  Language: {language}")
     print(f"  Diarize: {diarize}")
     print(f"  Filler words: {filler_words}")
+    print(f"  Timeout: {timeout}s")
 
     client = DeepgramClient(api_key=DEEPGRAM_API_KEY)
 
@@ -142,6 +150,7 @@ def transcribe_audio(
     mimetype = mimetype_map.get(suffix, "audio/mp3")
 
     # Transcribe with options using v1 API
+    # Use longer timeout for large files
     response = client.listen.v1.media.transcribe_file(
         request=audio_data,
         model="nova-3",
@@ -152,6 +161,7 @@ def transcribe_audio(
         utterances=True,  # Required for SRT generation
         filler_words=filler_words,
         diarize=diarize,
+        timeout=httpx.Timeout(timeout, connect=10.0),
     )
 
     # Convert response to dict
@@ -274,6 +284,13 @@ Note:
         action="store_true",
         help="Delete audio file after transcription (default: keep)",
     )
+    parser.add_argument(
+        "-t",
+        "--timeout",
+        type=int,
+        default=600,
+        help="API timeout in seconds (default: 600 for large files)",
+    )
     return parser.parse_args()
 
 
@@ -323,6 +340,7 @@ def main() -> int:
             language=args.language,
             diarize=args.diarize,
             filler_words=args.filler_words,
+            timeout=args.timeout,
         )
 
         # Save results
