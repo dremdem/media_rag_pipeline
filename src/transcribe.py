@@ -26,6 +26,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -202,10 +203,16 @@ def save_results(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Custom JSON encoder for datetime objects
+    def json_serializer(obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
     # Save full JSON response
     json_path = output_dir / f"{video_id}.json"
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(response, f, ensure_ascii=False, indent=2)
+        json.dump(response, f, ensure_ascii=False, indent=2, default=json_serializer)
     print(f"JSON saved: {json_path}")
 
     # Extract plain text transcript
