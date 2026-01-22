@@ -132,7 +132,9 @@ def transcribe_audio(
     print(f"  Filler words: {filler_words}")
     print(f"  Timeout: {timeout}s")
 
-    client = DeepgramClient(api_key=DEEPGRAM_API_KEY)
+    # Create client with custom httpx client for longer timeout
+    http_client = httpx.Client(timeout=httpx.Timeout(timeout, connect=30.0))
+    client = DeepgramClient(api_key=DEEPGRAM_API_KEY, httpx_client=http_client)
 
     with open(audio_path, "rb") as audio_file:
         audio_data = audio_file.read()
@@ -150,7 +152,6 @@ def transcribe_audio(
     mimetype = mimetype_map.get(suffix, "audio/mp3")
 
     # Transcribe with options using v1 API
-    # Use longer timeout for large files
     response = client.listen.v1.media.transcribe_file(
         request=audio_data,
         model="nova-3",
@@ -161,7 +162,6 @@ def transcribe_audio(
         utterances=True,  # Required for SRT generation
         filler_words=filler_words,
         diarize=diarize,
-        timeout=httpx.Timeout(timeout, connect=10.0),
     )
 
     # Convert response to dict
