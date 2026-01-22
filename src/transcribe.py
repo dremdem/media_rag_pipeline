@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+"""Transcribe YouTube videos using Deepgram API.
+
+This script downloads audio from a YouTube video, transcribes it using
+Deepgram's API, and saves the results as JSON, SRT, and plain text files.
+
+Usage:
+    uv run python src/transcribe.py "https://youtube.com/watch?v=VIDEO_ID"
+    uv run python src/transcribe.py "https://youtube.com/watch?v=VIDEO_ID" --language en
+    uv run python src/transcribe.py "https://youtube.com/watch?v=VIDEO_ID" --diarize
+
+Environment Variables:
+    DEEPGRAM_API_KEY: Required. Your Deepgram API key.
+
+Requirements:
+    - ffmpeg must be installed on the system for audio extraction
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+import yt_dlp
+from deepgram import DeepgramClient
+from deepgram_captions import DeepgramConverter, srt
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Configuration
+DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY")
+DEFAULT_OUTPUT_DIR = "data/transcripts"
+DEFAULT_LANGUAGE = "ru"
+
+
+def extract_video_id(url: str) -> str | None:
+    """Extract YouTube video ID from various URL formats."""
+    patterns = [
+        r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})",
+        r"^([a-zA-Z0-9_-]{11})$",  # Just the ID
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+
+def download_audio(url: str, output_dir: Path) -> Path:
+    """Download audio from YouTube video.
+
+    Args:
+        url: YouTube video URL
+        output_dir: Directory to save the audio file
+
+    Returns:
+        Path to the downloaded audio file
+    """
+    video_id = extract_video_id(url)
+    if not video_id:
+        raise ValueError(f"Could not extract video ID from URL: {url}")
+
+    output_template = str(output_dir / f"{video_id}.%(ext)s")
+
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": output_template,
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }
+        ],
+        "quiet": False,
+        "no_warnings": False,
+    }
+
+    print(f"Downloading audio from: {url}")
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+
+    audio_path = output_dir / f"{video_id}.mp3"
+    if not audio_path.exists():
+        raise FileNotFoundError(f"Audio file not created: {audio_path}")
+
+    print(f"Audio saved: {audio_path}")
+    return audio_path
+
+
+def transcribe_audio(
+    audio_path: Path,
+    language: str = DEFAULT_LANGUAGE,
+    diarize: bool = False,
+    filler_words: bool = False,
+) -> dict:
+    """Transcribe audio file using Deepgram API.
+
+    Args:
+        audio_path: Path to the audio file
+        language: Language code (e.g., 'ru', 'en')
+        diarize: Enable speaker diarization
+        filler_words: Include filler words like 'um', 'uh'
+
+    Returns:
+        Deepgram API response as dictionary
+    """
+    if not DEEPGRAM_API_KEY:
+        raise RuntimeError(
+            "DEEPGRAM_API_KEY is not set. "
+            "Please set it in your environment or .env file."
+        )
+
+    print(f"Transcribing: {audio_path}")
+    print(f"  Language: {language}")
+    print(f"  Diarize: {diarize}")
+    print(f"  Filler words: {filler_words}")
+
+    client = DeepgramClient(api_key=DEEPGRAM_API_KEY)
+
+    with open(audio_path, "rb") as audio_file:
+        audio_data = audio_file.read()
+
+    # Transcribe with options
+    response = client.listen.rest.v("1").transcribe_file(
+        {"buffer": audio_data, "mimetype": "audio/mp3"},
+        {
+            "model": "nova-3",
+            "language": language,
+            "smart_format": True,
+            "punctuate": True,
+            "paragraphs": True,
+            "utterances": True,  # Required for SRT generation
+            "filler_words": filler_words,
+            "diarize": diarize,
+        },
+    )
+
+    # Convert response to dict
+    return response.to_dict()
+
+
+def save_results(
+    response: dict,
+    output_dir: Path,
+    video_id: str,
+) -> tuple[Path, Path, Path]:
+    """Save transcription results to files.
+
+    Args:
+        response: Deepgram API response
+        output_dir: Output directory
+        video_id: YouTube video ID
+
+    Returns:
+        Tuple of (json_path, srt_path, txt_path)
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save full JSON response
+    json_path = output_dir / f"{video_id}.json"
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(response, f, ensure_ascii=False, indent=2)
+    print(f"JSON saved: {json_path}")
+
+    # Extract plain text transcript
+    transcript = ""
+    try:
+        channels = response.get("results", {}).get("channels", [])
+        if channels:
+            alternatives = channels[0].get("alternatives", [])
+            if alternatives:
+                transcript = alternatives[0].get("transcript", "")
+    except (KeyError, IndexError) as e:
+        print(f"Warning: Could not extract transcript: {e}")
+
+    # Save plain text
+    txt_path = output_dir / f"{video_id}.txt"
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(transcript)
+    print(f"TXT saved: {txt_path}")
+
+    # Generate and save SRT
+    srt_path = output_dir / f"{video_id}.srt"
+    try:
+        converter = DeepgramConverter(response)
+        srt_content = srt(converter)
+        with open(srt_path, "w", encoding="utf-8") as f:
+            f.write(srt_content)
+        print(f"SRT saved: {srt_path}")
+    except Exception as e:
+        print(f"Warning: Could not generate SRT: {e}")
+        srt_path = None
+
+    return json_path, srt_path, txt_path
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Transcribe YouTube videos using Deepgram API.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s "https://youtube.com/watch?v=VIDEO_ID"
+  %(prog)s "https://youtu.be/VIDEO_ID" --language en
+  %(prog)s "https://youtube.com/watch?v=VIDEO_ID" --diarize --delete-audio
+
+Environment:
+  DEEPGRAM_API_KEY    Your Deepgram API key (required)
+
+Note:
+  ffmpeg must be installed for audio extraction.
+  Install with: brew install ffmpeg (macOS)
+        """,
+    )
+    parser.add_argument(
+        "url",
+        help="YouTube video URL",
+    )
+    parser.add_argument(
+        "-l",
+        "--language",
+        default=DEFAULT_LANGUAGE,
+        help=f"Language code (default: {DEFAULT_LANGUAGE})",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        default=DEFAULT_OUTPUT_DIR,
+        help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})",
+    )
+    parser.add_argument(
+        "--diarize",
+        action="store_true",
+        help="Enable speaker diarization",
+    )
+    parser.add_argument(
+        "--filler-words",
+        action="store_true",
+        help="Include filler words like 'um', 'uh' (default: remove them)",
+    )
+    parser.add_argument(
+        "--delete-audio",
+        action="store_true",
+        help="Delete audio file after transcription (default: keep)",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    """Main entry point."""
+    args = parse_args()
+
+    # Validate API key
+    if not DEEPGRAM_API_KEY:
+        print("Error: DEEPGRAM_API_KEY is not set.", file=sys.stderr)
+        print("Please set it in your environment or .env file.", file=sys.stderr)
+        return 1
+
+    # Extract video ID
+    video_id = extract_video_id(args.url)
+    if not video_id:
+        print(f"Error: Could not extract video ID from: {args.url}", file=sys.stderr)
+        return 1
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Step 1: Download audio
+        audio_path = download_audio(args.url, output_dir)
+
+        # Step 2: Transcribe
+        response = transcribe_audio(
+            audio_path,
+            language=args.language,
+            diarize=args.diarize,
+            filler_words=args.filler_words,
+        )
+
+        # Step 3: Save results
+        json_path, srt_path, txt_path = save_results(response, output_dir, video_id)
+
+        # Step 4: Optionally delete audio
+        if args.delete_audio:
+            audio_path.unlink()
+            print(f"Audio deleted: {audio_path}")
+
+        print("\nTranscription complete!")
+        print(f"  Video ID: {video_id}")
+        print(f"  JSON: {json_path}")
+        print(f"  SRT: {srt_path}")
+        print(f"  TXT: {txt_path}")
+        if not args.delete_audio:
+            print(f"  Audio: {audio_path}")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

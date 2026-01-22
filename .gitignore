@@ -16,6 +16,11 @@ build/
 # Qdrant local storage
 qdrant_storage/
 
+# Downloaded/generated transcripts (keep sample.txt)
+data/transcripts/*.mp3
+data/transcripts/*.json
+data/transcripts/*.srt
+
 # IDE
 .idea/
 .vscode/
