@@ -186,10 +186,61 @@ def transcribe_audio(
         return response.__dict__
 
 
+def format_srt_timestamp(seconds: float) -> str:
+    """Format seconds to SRT timestamp (HH:MM:SS,mmm).
+
+    Args:
+        seconds: Time in seconds
+
+    Returns:
+        Formatted timestamp string
+    """
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int((seconds % 1) * 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def generate_srt_from_paragraphs(response: dict) -> str:
+    """Generate SRT content from paragraphs instead of utterances.
+
+    This produces longer, more readable subtitle segments compared to
+    the default utterance-based generation.
+
+    Args:
+        response: Deepgram API response dictionary
+
+    Returns:
+        SRT formatted string
+    """
+    paragraphs = (
+        response.get("results", {})
+        .get("channels", [{}])[0]
+        .get("alternatives", [{}])[0]
+        .get("paragraphs", {})
+        .get("paragraphs", [])
+    )
+
+    if not paragraphs:
+        raise ValueError("No paragraphs found in response. Ensure paragraphs=True in API call.")
+
+    srt_lines = []
+    for i, para in enumerate(paragraphs, 1):
+        start = format_srt_timestamp(para["start"])
+        end = format_srt_timestamp(para["end"])
+        # Combine all sentences in the paragraph
+        text = " ".join(s["text"] for s in para.get("sentences", []))
+        srt_lines.append(f"{i}\n{start} --> {end}\n{text}\n")
+
+    return "\n".join(srt_lines)
+
+
 def save_results(
     response: dict,
     output_dir: Path,
     video_id: str,
+    srt_mode: str = "utterances",
 ) -> tuple[Path, Path, Path]:
     """Save transcription results to files.
 
@@ -197,6 +248,8 @@ def save_results(
         response: Deepgram API response
         output_dir: Output directory
         video_id: YouTube video ID
+        srt_mode: SRT generation mode - "utterances" (short segments) or
+                  "paragraphs" (longer, more readable segments)
 
     Returns:
         Tuple of (json_path, srt_path, txt_path)
@@ -235,11 +288,15 @@ def save_results(
     # Generate and save SRT
     srt_path = output_dir / f"{video_id}.srt"
     try:
-        converter = DeepgramConverter(response)
-        srt_content = srt(converter)
+        if srt_mode == "paragraphs":
+            srt_content = generate_srt_from_paragraphs(response)
+        else:
+            # Default: use deepgram-captions with utterances
+            converter = DeepgramConverter(response)
+            srt_content = srt(converter)
         with open(srt_path, "w", encoding="utf-8") as f:
             f.write(srt_content)
-        print(f"SRT saved: {srt_path}")
+        print(f"SRT saved: {srt_path} (mode: {srt_mode})")
     except Exception as e:
         print(f"Warning: Could not generate SRT: {e}")
         srt_path = None
@@ -315,6 +372,13 @@ Note:
         default=600,
         help="API timeout in seconds (default: 600 for large files)",
     )
+    parser.add_argument(
+        "--srt-mode",
+        choices=["utterances", "paragraphs"],
+        default="utterances",
+        help="SRT generation mode: 'utterances' for short segments (default), "
+        "'paragraphs' for longer, more readable segments",
+    )
     return parser.parse_args()
 
 
@@ -368,7 +432,9 @@ def main() -> int:
         )
 
         # Save results
-        json_path, srt_path, txt_path = save_results(response, output_dir, file_id)
+        json_path, srt_path, txt_path = save_results(
+            response, output_dir, file_id, srt_mode=args.srt_mode
+        )
 
         # Optionally delete audio (only if downloaded)
         if args.delete_audio and downloaded:
