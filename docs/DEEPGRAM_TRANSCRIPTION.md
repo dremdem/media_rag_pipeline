@@ -128,7 +128,8 @@ This will:
 
 ```
 usage: transcribe.py [-h] [-a AUDIO_FILE] [-l LANGUAGE] [-o OUTPUT_DIR]
-                     [--diarize] [--filler-words] [--delete-audio] [url]
+                     [--diarize] [--filler-words] [--delete-audio]
+                     [-t TIMEOUT] [--srt-mode {utterances,paragraphs}] [url]
 
 positional arguments:
   url                   YouTube video URL (optional if --audio-file provided)
@@ -141,7 +142,16 @@ options:
   --diarize             Enable speaker diarization
   --filler-words        Include filler words like 'um', 'uh'
   --delete-audio        Delete audio file after transcription
+  -t, --timeout         API timeout in seconds (default: 600)
+  --srt-mode            SRT generation mode (default: utterances)
 ```
+
+#### SRT Modes
+
+| Mode | Segments | Duration | Best For |
+|------|----------|----------|----------|
+| `utterances` | Many (~1000+) | 1-4 seconds | Word-level precision |
+| `paragraphs` | Fewer (~100-200) | 10-40 seconds | Readable subtitles |
 
 ### Examples
 
@@ -183,6 +193,11 @@ uv run python src/transcribe.py --audio-file data/transcripts/x5wmGSAmUQA.mp3
 **Local file with options:**
 ```bash
 uv run python src/transcribe.py -a recording.wav --language en --diarize
+```
+
+**Generate readable SRT with paragraph-based segments:**
+```bash
+uv run python src/transcribe.py "https://youtube.com/watch?v=VIDEO_ID" --srt-mode paragraphs
 ```
 
 ---
