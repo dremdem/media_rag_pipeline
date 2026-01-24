@@ -135,7 +135,7 @@ POST /ner/persons
 → {"persons": ["Иванов", "Петрова"], "has_persons": true}
 ```
 
-See [services/ner/README.md](../services/ner/README.md) for details.
+See [NER_SERVICE.md](./NER_SERVICE.md) for details.
 
 ### Embeddings
 

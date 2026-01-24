@@ -26,7 +26,7 @@
 
 ## Services
 
-- [NER Service](../services/ner/README.md) - Russian PERSON-NER microservice for detecting person mentions
+- [NER_SERVICE.md](./NER_SERVICE.md) - Russian PERSON-NER microservice for detecting person mentions
 
 ## Plans
 

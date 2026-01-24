@@ -2,6 +2,23 @@
 
 > Lightweight FastAPI service for detecting person mentions in Russian text.
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Quick Start](#quick-start)
+  - [Docker](#docker-recommended)
+  - [Local Development](#local-development)
+- [API Endpoints](#api-endpoints)
+  - [POST /ner/persons](#post-nerpersons)
+  - [POST /ner/persons/batch](#post-nerpersonsbatch)
+  - [GET /healthz](#get-healthz)
+- [Usage Examples](#usage-examples)
+- [Performance](#performance)
+- [Limitations](#limitations)
+- [Model](#model)
+
+---
+
 ## Overview
 
 This service uses `r1char9/ner-rubert-tiny-news` (RuBERT-tiny2) to detect person entities in Russian text. It's designed as a **cheap filter** before expensive LLM calls in the opinion extraction pipeline.
@@ -13,6 +30,8 @@ graph LR
     C -->|No| D[Skip]
     C -->|Yes| E[LLM Opinion Extraction]
 ```
+
+---
 
 ## Quick Start
 
@@ -45,11 +64,13 @@ pip install transformers fastapi uvicorn[standard]
 uvicorn app.main:app --reload --port 8000
 ```
 
+---
+
 ## API Endpoints
 
 ### `POST /ner/persons`
 
-Extract person entities from Russian text.
+Extract person entities from a single Russian text.
 
 **Request:**
 ```json
@@ -68,6 +89,34 @@ Extract person entities from Russian text.
 }
 ```
 
+### `POST /ner/persons/batch`
+
+Extract person entities from multiple texts in a single request. More efficient than calling `/ner/persons` multiple times.
+
+**Request:**
+```json
+{
+  "texts": [
+    "Иванов раскритиковал Петрова.",
+    "Сегодня хорошая погода.",
+    "Сидоров выступил с речью."
+  ],
+  "return_raw": false
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {"persons": ["Иванов", "Петрова"], "has_persons": true, "raw": null},
+    {"persons": [], "has_persons": false, "raw": null},
+    {"persons": ["Сидоров"], "has_persons": true, "raw": null}
+  ],
+  "total_with_persons": 2
+}
+```
+
 ### `GET /healthz`
 
 Health check endpoint for Docker orchestration.
@@ -81,15 +130,22 @@ Health check endpoint for Docker orchestration.
 }
 ```
 
+---
+
 ## Usage Examples
 
 ### curl
 
 ```bash
-# Basic request
+# Single text
 curl -X POST "http://localhost:8000/ner/persons" \
   -H "Content-Type: application/json" \
   -d '{"text":"Иванов раскритиковал Петрова."}'
+
+# Batch request
+curl -X POST "http://localhost:8000/ner/persons/batch" \
+  -H "Content-Type: application/json" \
+  -d '{"texts":["Иванов met Петров.", "No persons here."]}'
 
 # With raw NER spans
 curl -X POST "http://localhost:8000/ner/persons" \
@@ -105,6 +161,7 @@ curl http://localhost:8000/healthz
 ```python
 import httpx
 
+# Single text
 response = httpx.post(
     "http://localhost:8000/ner/persons",
     json={"text": "Сидоров критикует Иванова."}
@@ -113,10 +170,22 @@ data = response.json()
 
 if data["has_persons"]:
     print(f"Found persons: {data['persons']}")
-    # Call LLM for opinion extraction
-else:
-    print("No persons mentioned, skipping LLM")
+
+# Batch request (more efficient for multiple texts)
+chunks = ["Иванов met Петров.", "Weather is nice.", "Сидоров spoke."]
+response = httpx.post(
+    "http://localhost:8000/ner/persons/batch",
+    json={"texts": chunks}
+)
+batch_data = response.json()
+
+print(f"Texts with persons: {batch_data['total_with_persons']}/{len(chunks)}")
+for i, result in enumerate(batch_data["results"]):
+    if result["has_persons"]:
+        print(f"  Chunk {i}: {result['persons']}")
 ```
+
+---
 
 ## Performance
 
@@ -131,6 +200,8 @@ For a 3-hour video (~180 chunks at 60s each):
 - NER processing: ~9 seconds total
 - Typical filter rate: 30-70% of chunks skipped
 
+---
+
 ## Limitations
 
 - Tuned for **news/media** content (public figures)
@@ -138,9 +209,13 @@ For a 3-hour video (~180 chunks at 60s each):
 - For canonical forms, add morphology normalization (e.g., `pymorphy2`)
 - For alias resolution ("Алексей Алексеевич" → "Иванов"), use entity linking
 
+---
+
 ## Model
 
-- **Name:** `r1char9/ner-rubert-tiny-news`
-- **Base:** RuBERT-tiny2
-- **Entities:** PER, ORG, LOC, GEOPOLIT, MEDIA
-- **Source:** [Hugging Face](https://huggingface.co/r1char9/ner-rubert-tiny-news)
+| Property | Value |
+|----------|-------|
+| **Name** | `r1char9/ner-rubert-tiny-news` |
+| **Base** | RuBERT-tiny2 |
+| **Entities** | PER, ORG, LOC, GEOPOLIT, MEDIA |
+| **Source** | [Hugging Face](https://huggingface.co/r1char9/ner-rubert-tiny-news) |
