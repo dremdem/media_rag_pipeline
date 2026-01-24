@@ -8,8 +8,10 @@
 - [Pipeline](#pipeline)
   - [Data Ingestion](#data-ingestion)
   - [Query Flow](#query-flow)
+  - [Opinion Extraction](#opinion-extraction)
 - [Components](#components)
   - [Transcription](#transcription)
+  - [NER Service](#ner-service)
   - [Embeddings](#embeddings)
   - [Vector Database](#vector-database)
   - [Orchestration](#orchestration)
@@ -67,6 +69,32 @@ graph TD
 2. Search Qdrant for similar vectors
 3. Return top-k chunks with metadata (timestamps, source)
 
+### Opinion Extraction
+
+Two-stage pipeline to extract opinions about persons from transcript chunks:
+
+```mermaid
+graph LR
+    A[Transcript Chunks] -->|Every chunk| B[NER Service]
+    B -->|Has PERSON?| C{Filter}
+    C -->|No| D[Skip]
+    C -->|Yes| E[LLM Opinion Extraction]
+    E --> F[Store Opinion + Persona]
+```
+
+**Why two stages?**
+
+| Stage | Tool | Cost | Speed | Purpose |
+|-------|------|------|-------|---------|
+| 1 | NER Service | Free (local) | ~50ms | Detect if chunk mentions any person |
+| 2 | LLM (GPT-4) | ~$0.01-0.03 | ~2s | Extract opinion about person |
+
+**Key distinction:**
+- **Mention** (NER): "Иванов встретился с Кузнецовым" → persons found, no opinion
+- **Opinion** (LLM): "Сидоров назвал Иванова некомпетентным" → opinion about Иванов by Сидоров
+
+This reduces LLM calls by 30-70% by filtering chunks without person mentions.
+
 ---
 
 ## Components
@@ -84,6 +112,30 @@ graph TD
 - Word-level timestamps
 - SRT subtitle generation
 - Optional speaker diarization
+
+### NER Service
+
+| Service | Model | Purpose | Status |
+|---------|-------|---------|--------|
+| **ru-person-ner** | `r1char9/ner-rubert-tiny-news` | Detect person mentions | Active |
+
+**Features:**
+- CPU-only (no GPU required)
+- ~50ms latency per chunk
+- Docker deployment
+- Health check endpoint (`/healthz`)
+
+**API Endpoint:**
+```
+POST /ner/persons
+{
+  "text": "Иванов раскритиковал Петрова.",
+  "return_raw": false
+}
+→ {"persons": ["Иванов", "Петрова"], "has_persons": true}
+```
+
+See [services/ner/README.md](../services/ner/README.md) for details.
 
 ### Embeddings
 
@@ -123,6 +175,12 @@ media_rag_pipeline/
 │   ├── ingest.py        # Ingest transcripts → Qdrant
 │   ├── query.py         # Query Qdrant
 │   └── transcribe.py    # YouTube → Deepgram → files
+├── services/
+│   └── ner/             # Russian PERSON-NER microservice
+│       ├── app/
+│       │   └── main.py  # FastAPI application
+│       ├── Dockerfile
+│       └── README.md
 ├── data/
 │   └── transcripts/     # Transcripts, SRT, audio
 ├── docs/                # Documentation
