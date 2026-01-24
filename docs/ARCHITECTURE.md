@@ -12,6 +12,7 @@
 - [Components](#components)
   - [Transcription](#transcription)
   - [NER Service](#ner-service)
+  - [Opinion Detector Service](#opinion-detector-service)
   - [Embeddings](#embeddings)
   - [Vector Database](#vector-database)
   - [Orchestration](#orchestration)
@@ -71,29 +72,32 @@ graph TD
 
 ### Opinion Extraction
 
-Two-stage pipeline to extract opinions about persons from transcript chunks:
+Three-stage pipeline to extract opinions about persons from transcript chunks:
 
 ```mermaid
 graph LR
     A[Transcript Chunks] -->|Every chunk| B[NER Service]
     B -->|Has PERSON?| C{Filter}
     C -->|No| D[Skip]
-    C -->|Yes| E[LLM Opinion Extraction]
-    E --> F[Store Opinion + Persona]
+    C -->|Yes| E[Opinion Detector]
+    E -->|has_opinion?| F{Filter}
+    F -->|No| G[Skip]
+    F -->|Yes| H[Store Result]
 ```
 
-**Why two stages?**
+**Pipeline stages:**
 
-| Stage | Tool | Cost | Speed | Purpose |
-|-------|------|------|-------|---------|
-| 1 | NER Service | Free (local) | ~50ms | Detect if chunk mentions any person |
-| 2 | LLM (GPT-4) | ~$0.01-0.03 | ~2s | Extract opinion about person |
+| Stage | Service | Port | Cost | Speed | Purpose |
+|-------|---------|------|------|-------|---------|
+| 1 | NER Service | 8000 | Free (local) | ~50ms | Detect person mentions |
+| 2 | Opinion Detector | 8001 | ~$0.001/chunk | ~1s | Detect if opinion exists |
+| 3 | (Optional) Extractor | - | ~$0.01/chunk | ~2s | Deep structured extraction |
 
 **Key distinction:**
 - **Mention** (NER): "Иванов встретился с Кузнецовым" → persons found, no opinion
-- **Opinion** (LLM): "Сидоров назвал Иванова некомпетентным" → opinion about Иванов by Сидоров
+- **Opinion** (Detector): "Сидоров назвал Иванова некомпетентным" → opinion about Иванов
 
-This reduces LLM calls by 30-70% by filtering chunks without person mentions.
+This reduces costs by 50-80% through progressive filtering.
 
 ---
 
@@ -137,6 +141,28 @@ POST /ner/persons
 
 See [NER_SERVICE.md](./NER_SERVICE.md) for details.
 
+### Opinion Detector Service
+
+| Service | Model | Purpose | Status |
+|---------|-------|---------|--------|
+| **opinion-detector** | `gpt-4o-mini` | Detect opinions about persons | Active |
+
+**Features:**
+- OpenAI-powered classification
+- SQLite persistence for caching
+- Batch endpoint for efficiency
+- ~$0.001/chunk cost
+
+**API Endpoints:**
+```
+POST /detect-opinion      # Single chunk
+POST /detect-opinion/batch # Multiple chunks
+GET  /chunks/{chunk_id}   # Retrieve stored result
+GET  /healthz             # Health check
+```
+
+See [OPINION_DETECTOR_SERVICE.md](./OPINION_DETECTOR_SERVICE.md) for details.
+
 ### Embeddings
 
 | Provider | Model | Dimensions | Status |
@@ -176,13 +202,19 @@ media_rag_pipeline/
 │   ├── query.py         # Query Qdrant
 │   └── transcribe.py    # YouTube → Deepgram → files
 ├── services/
-│   └── ner/             # Russian PERSON-NER microservice
+│   ├── ner/             # Russian PERSON-NER microservice (port 8000)
+│   │   ├── app/
+│   │   │   └── main.py
+│   │   └── Dockerfile
+│   └── opinion-detector/ # Opinion detection service (port 8001)
 │       ├── app/
-│       │   └── main.py  # FastAPI application
-│       ├── Dockerfile
-│       └── README.md
+│       │   ├── main.py
+│       │   ├── schemas.py
+│       │   └── db.py
+│       └── Dockerfile
 ├── data/
-│   └── transcripts/     # Transcripts, SRT, audio
+│   ├── transcripts/     # Transcripts, SRT, audio
+│   └── opinions/        # SQLite database (gitignored)
 ├── docs/                # Documentation
 └── qdrant_storage/      # Qdrant data (gitignored)
 ```
