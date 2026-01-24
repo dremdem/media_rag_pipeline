@@ -5,6 +5,7 @@
 - [Architecture](#architecture)
 - [Setup Guides](#setup-guides)
 - [Usage Guides](#usage-guides)
+- [Services](#services)
 - [Plans](#plans)
 
 ---
@@ -22,6 +23,10 @@
 ## Usage Guides
 
 - [DEEPGRAM_TRANSCRIPTION.md](./DEEPGRAM_TRANSCRIPTION.md) - Transcribe YouTube videos using Deepgram API
+
+## Services
+
+- [NER Service](../services/ner/README.md) - Russian PERSON-NER microservice for detecting person mentions
 
 ## Plans
 
