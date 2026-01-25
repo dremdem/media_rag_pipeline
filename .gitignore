@@ -16,6 +16,9 @@ build/
 # Qdrant local storage
 qdrant_storage/
 
+# Opinion detector SQLite database
+data/opinions/
+
 # Downloaded/generated transcripts (keep sample.txt)
 data/transcripts/*.mp3
 data/transcripts/*.json

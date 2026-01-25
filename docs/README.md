@@ -27,6 +27,7 @@
 ## Services
 
 - [NER_SERVICE.md](./NER_SERVICE.md) - Russian PERSON-NER microservice for detecting person mentions
+- [OPINION_DETECTOR_SERVICE.md](./OPINION_DETECTOR_SERVICE.md) - Opinion detection service using OpenAI
 
 ## Plans
 
