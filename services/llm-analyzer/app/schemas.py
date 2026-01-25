@@ -136,6 +136,17 @@ class FullSegmentRequest(BaseModel):
     utterances: list[Utterance] = Field(..., min_length=1, description="All utterances")
 
 
+class DeepgramSegmentRequest(BaseModel):
+    """Request for segmentation from raw Deepgram JSON output.
+
+    Accepts the full Deepgram transcription JSON file, extracts utterances,
+    and runs the full segmentation pipeline.
+    """
+
+    video_id: str = Field(..., min_length=1, description="Video identifier")
+    deepgram_json: dict = Field(..., description="Raw Deepgram API response JSON")
+
+
 class StoredBoundarySegment(BaseModel):
     """Stored boundary segment with timestamps."""
 

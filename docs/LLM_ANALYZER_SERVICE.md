@@ -1,19 +1,17 @@
 # LLM Analyzer Service
 
-> FastAPI service providing LLM-powered text analysis: opinion detection and Q&A semantic segmentation.
+> FastAPI service providing LLM-powered text analysis: Q&A semantic segmentation and opinion detection.
 
 ## Table of Contents
 
 - [Overview](#overview)
+- [Pipeline Position](#pipeline-position)
 - [Quick Start](#quick-start)
-  - [Docker](#docker-recommended)
-  - [Local Development](#local-development)
 - [API Endpoints](#api-endpoints)
-  - [Opinion Detection](#opinion-detection)
   - [Q&A Segmentation](#qa-segmentation)
+  - [Opinion Detection](#opinion-detection)
   - [Health Check](#health-check)
 - [Configuration](#configuration)
-- [Data Models](#data-models)
 - [Usage Examples](#usage-examples)
 - [Cost Estimates](#cost-estimates)
 
@@ -23,16 +21,35 @@
 
 The LLM Analyzer service uses OpenAI API to provide two main capabilities:
 
-1. **Opinion Detection** - Detects whether text contains opinions about persons
-2. **Q&A Segmentation** - Segments transcripts into narrative/Q&A regions and semantic blocks
+1. **Q&A Segmentation** - Segments transcripts into narrative/Q&A regions and semantic blocks
+2. **Opinion Detection** - Detects whether text contains opinions about persons
+
+**Important:** In the full pipeline, segmentation runs FIRST to break the transcript into meaningful blocks, THEN opinion detection runs on each block (after NER).
+
+---
+
+## Pipeline Position
 
 ```mermaid
-graph LR
-    A[Transcript/Utterances] --> B[LLM Analyzer :8001]
-    B --> C{Analysis Type}
-    C -->|Opinion| D[has_opinion, targets, spans]
-    C -->|Segmentation| E[boundaries, qa_blocks]
+graph TD
+    A[YouTube Video] -->|Deepgram| B[JSON with Utterances]
+    B -->|LLM Analyzer| C[Q&A Segmentation]
+    C --> D[Q&A Blocks]
+    D -->|NER Service| E[Blocks + Persons]
+    E -->|LLM Analyzer| F[Opinion Detection]
+    F --> G[Opinions about Persons]
 ```
+
+**Full pipeline order:**
+
+| Step | Service | Endpoint | Input | Output |
+|------|---------|----------|-------|--------|
+| 1 | Deepgram | (external API) | YouTube URL | JSON with utterances |
+| 2 | LLM Analyzer | `/segment/qa/from-deepgram` | Deepgram JSON | Q&A blocks |
+| 3 | NER Service | `/ner/persons` | Block text | persons[] |
+| 4 | LLM Analyzer | `/detect-opinion` | Block + persons | has_opinion, targets |
+
+See [PIPELINE_GUIDE.md](./PIPELINE_GUIDE.md) for step-by-step manual testing.
 
 ---
 
@@ -58,18 +75,9 @@ docker run --rm -p 8001:8001 \
 
 ```bash
 cd services/llm-analyzer
-
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies
+python -m venv .venv && source .venv/bin/activate
 pip install fastapi uvicorn[standard] openai pydantic tenacity
-
-# Set environment variables
 export OPENAI_API_KEY="sk-..."
-
-# Run
 uvicorn app.main:app --reload --port 8001
 ```
 
@@ -77,144 +85,54 @@ uvicorn app.main:app --reload --port 8001
 
 ## API Endpoints
 
-### Opinion Detection
-
-#### `POST /detect-opinion`
-
-Detect opinion in a single text chunk.
-
-**Request:**
-```json
-{
-  "chunk_id": "vid123_0042",
-  "start": 120.0,
-  "end": 165.0,
-  "text": "Вот такое стремление Иванова к миру. Он всегда был за мирное решение.",
-  "persons": ["Иванов"]
-}
-```
-
-**Response:**
-```json
-{
-  "has_opinion": true,
-  "targets": ["Иванов"],
-  "opinion_spans": ["Вот такое стремление Иванова к миру."],
-  "polarity": "negative",
-  "confidence": 0.86
-}
-```
-
-#### `POST /detect-opinion/batch`
-
-Detect opinions in multiple chunks.
-
-**Request:**
-```json
-{
-  "items": [
-    {"chunk_id": "001", "start": 0, "end": 30, "text": "...", "persons": ["Иванов"]},
-    {"chunk_id": "002", "start": 30, "end": 60, "text": "...", "persons": ["Петров"]}
-  ]
-}
-```
-
-**Response:**
-```json
-{
-  "results": [
-    {"has_opinion": true, "targets": ["Иванов"], ...},
-    {"has_opinion": false, "targets": [], ...}
-  ],
-  "total_with_opinions": 1
-}
-```
-
-#### `GET /chunks/{chunk_id}`
-
-Retrieve stored detection result.
-
----
-
 ### Q&A Segmentation
 
-#### `POST /segment/qa/boundaries` (Pass 1)
+#### `POST /segment/qa/from-deepgram` (Recommended)
 
-Segment transcript into **narrative** vs **Q&A** regions.
+**Process raw Deepgram JSON directly.** This is the easiest way to segment a transcript.
 
-**Request:**
-```json
-{
-  "video_id": "x5wmGSAmUQA",
-  "utterances": [
-    {"u": 0, "start": 0.0, "end": 3.2, "text": "Здравствуйте..."},
-    {"u": 1, "start": 3.2, "end": 7.1, "text": "Сегодня поговорим..."}
-  ]
-}
+```bash
+VIDEO_ID="x5wmGSAmUQA"
+curl -X POST "http://localhost:8001/segment/qa/from-deepgram" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"video_id\": \"$VIDEO_ID\",
+    \"deepgram_json\": $(cat data/transcripts/$VIDEO_ID.json)
+  }"
 ```
 
 **Response:**
 ```json
 {
   "video_id": "x5wmGSAmUQA",
-  "segments": [
-    {"type": "narrative", "start_u": 0, "end_u": 120, "confidence": 0.84, "notes": "Intro and news"},
-    {"type": "qa", "start_u": 121, "end_u": 360, "confidence": 0.79, "notes": "Q&A session"}
-  ]
-}
-```
-
-#### `POST /segment/qa/blocks` (Pass 2)
-
-Segment Q&A region into semantic answer blocks.
-
-**Request:**
-```json
-{
-  "video_id": "x5wmGSAmUQA",
-  "utterances": [
-    {"u": 121, "start": 312.4, "end": 315.8, "text": "Первый вопрос..."}
+  "boundary_segments": [
+    {"seg_id": "seg_000", "type": "narrative", "start": 0.0, "end": 1200.5, ...},
+    {"seg_id": "seg_001", "type": "qa", "start": 1200.5, "end": 3600.0, ...}
   ],
-  "qa_range": {"start_u": 121, "end_u": 360}
-}
-```
-
-**Response:**
-```json
-{
-  "video_id": "x5wmGSAmUQA",
   "qa_blocks": [
     {
-      "start_u": 121,
-      "end_u": 156,
+      "block_id": "qa_000",
+      "start": 1200.5,
+      "end": 1350.0,
+      "text": "Concatenated utterance text for this block...",
       "questions": ["Как вы оцениваете ситуацию?"],
-      "answer_summary": "Обсуждение текущей экономической ситуации",
-      "confidence": 0.74
+      "answer_summary": "Обсуждение текущей экономической ситуации"
     }
   ]
 }
 ```
 
+#### `POST /segment/qa/boundaries` (Pass 1)
+
+Segment transcript into **narrative** vs **Q&A** regions.
+
+#### `POST /segment/qa/blocks` (Pass 2)
+
+Segment Q&A region into semantic answer blocks.
+
 #### `POST /segment/qa/run` (Combined)
 
-Run full segmentation pipeline (Pass 1 + Pass 2).
-
-**Request:**
-```json
-{
-  "video_id": "x5wmGSAmUQA",
-  "utterances": [...]
-}
-```
-
-**Response:**
-```json
-{
-  "video_id": "x5wmGSAmUQA",
-  "boundary_segments": [...],
-  "qa_blocks": [...]
-}
-```
+Run full segmentation pipeline with pre-extracted utterances.
 
 #### `GET /segments/{video_id}`
 
@@ -223,6 +141,46 @@ Retrieve stored segmentation results.
 #### `GET /exports/{video_id}`
 
 Get exported JSON file for a video.
+
+---
+
+### Opinion Detection
+
+**Note:** Opinion detection typically runs AFTER segmentation and NER.
+
+#### `POST /detect-opinion`
+
+Detect opinion in a single text chunk.
+
+**Request:**
+```json
+{
+  "chunk_id": "x5wmGSAmUQA_qa_000",
+  "start": 1200.5,
+  "end": 1350.0,
+  "text": "Иванов сказал, что Петров сделал ошибку. Это было некомпетентно.",
+  "persons": ["Иванов", "Петров"]
+}
+```
+
+**Response:**
+```json
+{
+  "has_opinion": true,
+  "targets": ["Петров"],
+  "opinion_spans": ["Это было некомпетентно"],
+  "polarity": "negative",
+  "confidence": 0.85
+}
+```
+
+#### `POST /detect-opinion/batch`
+
+Detect opinions in multiple chunks.
+
+#### `GET /chunks/{chunk_id}`
+
+Retrieve stored detection result.
 
 ---
 
@@ -252,105 +210,84 @@ Get exported JSON file for a video.
 
 ---
 
-## Data Models
-
-### Utterance (Input)
-
-```json
-{
-  "u": 0,
-  "start": 0.0,
-  "end": 3.2,
-  "text": "Utterance text..."
-}
-```
-
-### Boundary Segment
-
-```json
-{
-  "type": "narrative | qa",
-  "start_u": 0,
-  "end_u": 120,
-  "confidence": 0.84,
-  "notes": "Description of segment"
-}
-```
-
-### Q&A Block
-
-```json
-{
-  "start_u": 121,
-  "end_u": 156,
-  "questions": ["Question text if detected"],
-  "answer_summary": "Short summary of answer",
-  "confidence": 0.74
-}
-```
-
----
-
 ## Usage Examples
 
-### curl
+### Typical Pipeline Flow
 
 ```bash
-# Opinion detection
-curl -X POST "http://localhost:8001/detect-opinion" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "chunk_id": "demo_001",
-    "start": 0,
-    "end": 30,
-    "text": "Иванов молодец, справился с задачей.",
-    "persons": ["Иванов"]
-  }'
+# 1. Transcribe video (creates data/transcripts/VIDEO_ID.json)
+uv run python src/transcribe.py "https://youtube.com/watch?v=VIDEO_ID"
 
-# Full Q&A segmentation
-curl -X POST "http://localhost:8001/segment/qa/run" \
+# 2. Segment into Q&A blocks
+VIDEO_ID="VIDEO_ID"
+SEGMENTS=$(curl -s -X POST "http://localhost:8001/segment/qa/from-deepgram" \
   -H "Content-Type: application/json" \
-  -d '{
-    "video_id": "test_video",
-    "utterances": [
-      {"u": 0, "start": 0.0, "end": 5.0, "text": "Начнем с новостей..."},
-      {"u": 1, "start": 5.0, "end": 10.0, "text": "А теперь ваши вопросы..."}
-    ]
-  }'
+  -d "{\"video_id\": \"$VIDEO_ID\", \"deepgram_json\": $(cat data/transcripts/$VIDEO_ID.json)}")
 
-# Get export
-curl "http://localhost:8001/exports/test_video"
+# 3. For each Q&A block, run NER then Opinion Detection
+echo "$SEGMENTS" | jq -c '.qa_blocks[]' | while read block; do
+  TEXT=$(echo $block | jq -r '.text')
+  BLOCK_ID=$(echo $block | jq -r '.block_id')
+
+  # NER
+  PERSONS=$(curl -s -X POST "http://localhost:8000/ner/persons" \
+    -H "Content-Type: application/json" \
+    -d "{\"text\": \"$TEXT\"}" | jq '.persons')
+
+  # Opinion Detection (only if persons found)
+  if [ "$PERSONS" != "[]" ]; then
+    curl -s -X POST "http://localhost:8001/detect-opinion" \
+      -H "Content-Type: application/json" \
+      -d "{
+        \"chunk_id\": \"${VIDEO_ID}_${BLOCK_ID}\",
+        \"start\": $(echo $block | jq '.start'),
+        \"end\": $(echo $block | jq '.end'),
+        \"text\": \"$TEXT\",
+        \"persons\": $PERSONS
+      }"
+  fi
+done
 ```
 
-### Python
+### Python Example
 
 ```python
 import httpx
+import json
 
-# Opinion detection
-response = httpx.post(
-    "http://localhost:8001/detect-opinion",
-    json={
-        "chunk_id": "demo_001",
-        "start": 0,
-        "end": 30,
-        "text": "Иванов молодец.",
-        "persons": ["Иванов"],
-    },
-)
-result = response.json()
-print(f"Has opinion: {result['has_opinion']}")
+# Load Deepgram JSON
+with open("data/transcripts/VIDEO_ID.json") as f:
+    deepgram_json = json.load(f)
 
-# Q&A segmentation
-response = httpx.post(
-    "http://localhost:8001/segment/qa/run",
-    json={
-        "video_id": "my_video",
-        "utterances": utterances_list,
-    },
-)
-segments = response.json()
-print(f"Found {len(segments['qa_blocks'])} Q&A blocks")
+# 1. Segment
+segments = httpx.post(
+    "http://localhost:8001/segment/qa/from-deepgram",
+    json={"video_id": "VIDEO_ID", "deepgram_json": deepgram_json},
+).json()
+
+# 2. Process each Q&A block
+for block in segments["qa_blocks"]:
+    # NER
+    ner = httpx.post(
+        "http://localhost:8000/ner/persons",
+        json={"text": block["text"]},
+    ).json()
+
+    if ner["has_persons"]:
+        # Opinion Detection
+        opinion = httpx.post(
+            "http://localhost:8001/detect-opinion",
+            json={
+                "chunk_id": f"VIDEO_ID_{block['block_id']}",
+                "start": block["start"],
+                "end": block["end"],
+                "text": block["text"],
+                "persons": ner["persons"],
+            },
+        ).json()
+
+        if opinion["has_opinion"]:
+            print(f"Opinion about {opinion['targets']}: {opinion['opinion_spans']}")
 ```
 
 ---
@@ -359,28 +296,28 @@ print(f"Found {len(segments['qa_blocks'])} Q&A blocks")
 
 Using `gpt-4o-mini` (~$0.15/1M input tokens, ~$0.60/1M output tokens):
 
-### Opinion Detection
+### Q&A Segmentation (per video)
 
-| Scenario | Chunks/day | With persons | Cost/day |
-|----------|------------|--------------|----------|
-| 3h video | ~180 | ~50 (30%) | ~$0.05 |
-| 10h video | ~600 | ~180 (30%) | ~$0.18 |
-
-### Q&A Segmentation
-
-| Pass | Tokens (avg) | Cost/video |
-|------|--------------|------------|
+| Pass | Tokens (avg) | Cost |
+|------|--------------|------|
 | Pass 1 (boundaries) | ~5,000 | ~$0.001 |
 | Pass 2 (Q&A blocks) | ~3,000 | ~$0.0005 |
 | **Total** | ~8,000 | **~$0.002** |
+
+### Opinion Detection (per video)
+
+| Scenario | Q&A Blocks | With Persons | Cost |
+|----------|------------|--------------|------|
+| 1h video | ~20 | ~10 (50%) | ~$0.01 |
+| 3h video | ~60 | ~30 (50%) | ~$0.03 |
 
 ---
 
 ## SQLite Schema
 
-The service uses SQLite for persistence with four tables:
-
-- `opinion_detection` - Stores opinion detection results
-- `qa_boundary` - Stores narrative/Q&A segments
-- `qa_block` - Stores semantic Q&A blocks
-- `qa_export` - Caches JSON exports
+| Table | Purpose |
+|-------|---------|
+| `opinion_detection` | Stores opinion detection results |
+| `qa_boundary` | Stores narrative/Q&A segments |
+| `qa_block` | Stores semantic Q&A blocks |
+| `qa_export` | Caches JSON exports |

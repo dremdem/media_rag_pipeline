@@ -22,6 +22,7 @@
 
 ## Usage Guides
 
+- [PIPELINE_GUIDE.md](./PIPELINE_GUIDE.md) - Step-by-step manual testing guide for the full pipeline
 - [DEEPGRAM_TRANSCRIPTION.md](./DEEPGRAM_TRANSCRIPTION.md) - Transcribe YouTube videos using Deepgram API
 
 ## Services

@@ -47,6 +47,7 @@ from .schemas import (
     BoundaryResponse,
     BoundarySegment,
     ChunkResponse,
+    DeepgramSegmentRequest,
     DetectBatchRequest,
     DetectBatchResponse,
     DetectRequest,
@@ -524,6 +525,60 @@ def segment_full(req: FullSegmentRequest) -> SegmentsResponse:
         boundary_segments=stored_boundaries,
         qa_blocks=all_blocks,
     )
+
+
+def _extract_utterances_from_deepgram(deepgram_json: dict) -> list[Utterance]:
+    """Extract utterances from raw Deepgram API response.
+
+    Deepgram utterances have: start, end, transcript, id
+    We convert to our format with: u (index), start, end, text
+    """
+    try:
+        raw_utterances = deepgram_json.get("results", {}).get("utterances", [])
+    except (KeyError, AttributeError):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid Deepgram JSON: missing results.utterances",
+        )
+
+    if not raw_utterances:
+        raise HTTPException(
+            status_code=400,
+            detail="No utterances found in Deepgram JSON. Ensure utterances=True in transcription.",
+        )
+
+    utterances = []
+    for i, utt in enumerate(raw_utterances):
+        utterances.append(
+            Utterance(
+                u=i,
+                start=utt.get("start", 0.0),
+                end=utt.get("end", 0.0),
+                text=utt.get("transcript", ""),
+            )
+        )
+
+    return utterances
+
+
+@app.post("/segment/qa/from-deepgram", response_model=SegmentsResponse)
+def segment_from_deepgram(req: DeepgramSegmentRequest) -> SegmentsResponse:
+    """Segment from raw Deepgram JSON output.
+
+    This is a convenience endpoint that accepts the full Deepgram transcription
+    JSON file (as returned by src/transcribe.py), extracts utterances, and runs
+    the full segmentation pipeline.
+
+    Example:
+        1. Transcribe video: uv run python src/transcribe.py "https://youtube.com/watch?v=VIDEO_ID"
+        2. Send the resulting JSON to this endpoint
+
+    The endpoint extracts utterances from results.utterances and runs Pass 1 + Pass 2.
+    """
+    utterances = _extract_utterances_from_deepgram(req.deepgram_json)
+
+    full_req = FullSegmentRequest(video_id=req.video_id, utterances=utterances)
+    return segment_full(full_req)
 
 
 def _build_and_save_export(
