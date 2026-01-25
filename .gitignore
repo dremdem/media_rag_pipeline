@@ -16,15 +16,22 @@ build/
 # Qdrant local storage
 qdrant_storage/
 
-# Opinion detector SQLite database
+# LLM Analyzer SQLite database and exports
 data/opinions/
+services/llm-analyzer/data/
+services/llm-analyzer/exports/*.json
 
 # Downloaded/generated transcripts (keep sample.txt)
 data/transcripts/*.mp3
 data/transcripts/*.json
 data/transcripts/*.srt
+data/transcripts/*.txt
+!data/transcripts/sample.txt
 
 # IDE
 .idea/
 .vscode/
 *.swp
+
+# macOS
+.DS_Store

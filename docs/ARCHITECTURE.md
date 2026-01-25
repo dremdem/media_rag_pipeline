@@ -9,10 +9,11 @@
   - [Data Ingestion](#data-ingestion)
   - [Query Flow](#query-flow)
   - [Opinion Extraction](#opinion-extraction)
+  - [Q&A Segmentation](#qa-segmentation)
 - [Components](#components)
   - [Transcription](#transcription)
   - [NER Service](#ner-service)
-  - [Opinion Detector Service](#opinion-detector-service)
+  - [LLM Analyzer Service](#llm-analyzer-service)
   - [Embeddings](#embeddings)
   - [Vector Database](#vector-database)
   - [Orchestration](#orchestration)
@@ -79,7 +80,7 @@ graph LR
     A[Transcript Chunks] -->|Every chunk| B[NER Service]
     B -->|Has PERSON?| C{Filter}
     C -->|No| D[Skip]
-    C -->|Yes| E[Opinion Detector]
+    C -->|Yes| E[LLM Analyzer]
     E -->|has_opinion?| F{Filter}
     F -->|No| G[Skip]
     F -->|Yes| H[Store Result]
@@ -90,7 +91,7 @@ graph LR
 | Stage | Service | Port | Cost | Speed | Purpose |
 |-------|---------|------|------|-------|---------|
 | 1 | NER Service | 8000 | Free (local) | ~50ms | Detect person mentions |
-| 2 | Opinion Detector | 8001 | ~$0.001/chunk | ~1s | Detect if opinion exists |
+| 2 | LLM Analyzer | 8001 | ~$0.001/chunk | ~1s | Detect if opinion exists |
 | 3 | (Optional) Extractor | - | ~$0.01/chunk | ~2s | Deep structured extraction |
 
 **Key distinction:**
@@ -98,6 +99,33 @@ graph LR
 - **Opinion** (Detector): "Сидоров назвал Иванова некомпетентным" → opinion about Иванов
 
 This reduces costs by 50-80% through progressive filtering.
+
+### Q&A Segmentation
+
+Two-pass LLM workflow to segment transcripts into semantic Q&A blocks:
+
+```mermaid
+graph TD
+    A[Deepgram Utterances] -->|Pass 1| B[LLM Analyzer]
+    B -->|Boundary Detection| C{Segment Type}
+    C -->|Narrative| D[Skip]
+    C -->|Q&A| E[Pass 2]
+    E -->|Block Segmentation| F[Semantic Q&A Blocks]
+    F -->|Export| G[JSON + SQLite]
+```
+
+**Two-pass workflow:**
+
+| Pass | Endpoint | Purpose | Output |
+|------|----------|---------|--------|
+| 1 | `/segment/qa/boundaries` | Split into narrative vs Q&A | Segment boundaries |
+| 2 | `/segment/qa/blocks` | Split Q&A into semantic blocks | Answer blocks |
+| Combined | `/segment/qa/run` | Full pipeline | Boundaries + Blocks |
+
+**Why utterances (not paragraphs):**
+- Deepgram "paragraphs" are driven by pauses, not meaning
+- Utterances provide stable indices and accurate timestamps
+- Enables rebuilding text reliably by concatenation
 
 ---
 
@@ -141,27 +169,37 @@ POST /ner/persons
 
 See [NER_SERVICE.md](./NER_SERVICE.md) for details.
 
-### Opinion Detector Service
+### LLM Analyzer Service
 
 | Service | Model | Purpose | Status |
 |---------|-------|---------|--------|
-| **opinion-detector** | `gpt-4o-mini` | Detect opinions about persons | Active |
+| **llm-analyzer** | `gpt-4o-mini` | Opinion detection + Q&A segmentation | Active |
 
 **Features:**
-- OpenAI-powered classification
+- OpenAI-powered classification and segmentation
 - SQLite persistence for caching
-- Batch endpoint for efficiency
-- ~$0.001/chunk cost
+- Batch endpoints for efficiency
+- JSON export for Q&A segments
+- ~$0.001/chunk for opinions, ~$0.002/video for segmentation
 
-**API Endpoints:**
+**Opinion Detection Endpoints:**
 ```
-POST /detect-opinion      # Single chunk
+POST /detect-opinion       # Single chunk
 POST /detect-opinion/batch # Multiple chunks
-GET  /chunks/{chunk_id}   # Retrieve stored result
-GET  /healthz             # Health check
+GET  /chunks/{chunk_id}    # Retrieve stored result
 ```
 
-See [OPINION_DETECTOR_SERVICE.md](./OPINION_DETECTOR_SERVICE.md) for details.
+**Q&A Segmentation Endpoints:**
+```
+POST /segment/qa/boundaries  # Pass 1: Narrative vs Q&A
+POST /segment/qa/blocks      # Pass 2: Semantic blocks
+POST /segment/qa/run         # Combined Pass 1 + 2
+GET  /segments/{video_id}    # Retrieve results
+GET  /exports/{video_id}     # Download JSON export
+GET  /healthz                # Health check
+```
+
+See [LLM_ANALYZER_SERVICE.md](./LLM_ANALYZER_SERVICE.md) for details.
 
 ### Embeddings
 
@@ -206,11 +244,13 @@ media_rag_pipeline/
 │   │   ├── app/
 │   │   │   └── main.py
 │   │   └── Dockerfile
-│   └── opinion-detector/ # Opinion detection service (port 8001)
+│   └── llm-analyzer/    # LLM analysis service (port 8001)
 │       ├── app/
 │       │   ├── main.py
 │       │   ├── schemas.py
-│       │   └── db.py
+│       │   ├── db.py
+│       │   └── prompts.py
+│       ├── exports/     # JSON export files
 │       └── Dockerfile
 ├── data/
 │   ├── transcripts/     # Transcripts, SRT, audio
@@ -225,7 +265,7 @@ media_rag_pipeline/
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENAI_API_KEY` | Yes | OpenAI API for embeddings |
+| `OPENAI_API_KEY` | Yes | OpenAI API for embeddings and LLM analysis |
 | `DEEPGRAM_API_KEY` | Yes | Deepgram API for transcription |
 | `QDRANT_URL` | No | Qdrant URL (default: localhost:6333) |
 | `QDRANT_COLLECTION` | No | Collection name (default: mentions_mvp) |
