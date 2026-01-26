@@ -229,20 +229,26 @@ def build_blocks_prompt(utterances: list[Utterance], qa_range: dict[str, int]) -
             "what_is_a_block": (
                 "ONE block = ONE viewer's question/comment + the host's COMPLETE answer. "
                 "The answer may be long (5-20 utterances) - that's still ONE block. "
-                "A new block starts ONLY when a NEW VIEWER is addressed."
+                "A new block starts ONLY when a DIFFERENT VIEWER's question/comment begins."
             ),
             "how_to_detect_new_block": (
-                "A NEW block starts when you see a NEW VIEWER NAME at the START of an utterance. "
-                "Pattern: '[Имя]. ...' or '[Имя], ...' or '[Имя] пишет/спрашивает...' "
-                "Examples: 'Виктор.', 'Ольга,', 'Андрей пишет:', 'Поле из Сум.' "
-                "If no new viewer name → it's the SAME block (continuation of answer)."
+                "A NEW block starts when you see a DIFFERENT VIEWER NAME introducing a NEW question. "
+                "Pattern: '[Имя]. [new question]' or '[Имя] пишет/спрашивает: [new question]' "
+                "Examples: 'Виктор. Как вы думаете...', 'Ольга спрашивает:', 'Поле из Сум.' "
+                "If no NEW question from a DIFFERENT viewer → it's the SAME block."
             ),
             "what_is_NOT_a_new_block": [
+                "Host addressing viewer to ANSWER their question: 'Уважаемая Екатерина, ...' (same block!)",
+                "Host responding with viewer's name: 'Вы знаете, уважаемый Андрей, ...' (same block!)",
                 "Topic change within the same answer",
-                "Host saying 'уважаемая/уважаемый' mid-answer",
                 "Utterances starting with 'но', 'и', 'также', 'потому что'",
                 "Any continuation of the host's reasoning",
             ],
+            "CRITICAL_PATTERN": (
+                "When host reads question then says 'Уважаемая/Уважаемый [Name], ...' to answer, "
+                "this is the SAME block! The host is addressing the SAME viewer whose question was just read. "
+                "Example: '[Question from Екатерина]... Уважаемая Екатерина, я думаю...' = ONE block, not two!"
+            ),
         },
         "question_extraction_rules": {
             "NEVER_HALLUCINATE": (
@@ -272,34 +278,36 @@ def build_blocks_prompt(utterances: list[Utterance], qa_range: dict[str, int]) -
             "description": "How blocks should look (note: answer_summary must be in Russian!):",
             "blocks": [
                 {
-                    "comment": "Block starts with viewer name 'Виктор'",
+                    "comment": "Block includes BOTH the question reading AND the answer with 'Уважаемая'",
+                    "start_text": "Екатерина спрашивает: как вы относитесь к свободе слова?... Уважаемая Екатерина, свобода слова имеет границы...",
+                    "spans": "25 utterances (question + full answer)",
+                    "questions": ["как вы относитесь к свободе слова?"],
+                    "answer_summary": "Ведущий объясняет границы свободы слова и почему оскорбления недопустимы.",
+                    "note": "'Уважаемая Екатерина' is the answer, NOT a new block!",
+                },
+                {
+                    "comment": "NEW block because DIFFERENT viewer 'Андрей' appears with NEW question",
+                    "start_text": "Андрей пишет: поймал себя на мысли...",
+                    "spans": "10 utterances (host's response)",
+                    "questions": [],
+                    "answer_summary": "Ведущий не видит сходства между упомянутыми скандалами.",
+                },
+                {
+                    "comment": "NEW block because DIFFERENT viewer 'Виктор' appears",
                     "start_text": "Виктор, к вопросу о ФБК...",
                     "spans": "15 utterances (host's full answer about FBK)",
                     "questions": ["к вопросу о ФБК"],
                     "answer_summary": "Ведущий обсуждает ситуацию в ФБК и возможных кандидатов на интервью.",
-                },
-                {
-                    "comment": "NEW block because NEW viewer 'Ольга' appears",
-                    "start_text": "Ольга. Как вы относитесь к свободе слова?",
-                    "spans": "20 utterances (host's full answer about freedom of speech)",
-                    "questions": ["Как вы относитесь к свободе слова?"],
-                    "answer_summary": "Ведущий объясняет границы свободы слова и почему оскорбления недопустимы.",
-                },
-                {
-                    "comment": "NEW block because NEW viewer 'Андрей' appears",
-                    "start_text": "Андрей пишет: поймал себя на мысли...",
-                    "spans": "10 utterances (host's response)",
-                    "questions": [],
-                    "answer_summary": "Ведущий не видит сходства между упомянутыми скандалами и объясняет различия.",
                 },
             ],
         },
         "example_incorrect_segmentation": {
             "description": "What NOT to do:",
             "mistakes": [
-                "WRONG: Splitting host's answer about Lithuania into 3 blocks",
+                "WRONG: '[Question]...' in one block, 'Уважаемая Екатерина, [answer]...' in another block - these should be ONE block!",
+                "WRONG: Splitting question reading from the answer - they belong together!",
+                "WRONG: Treating 'Уважаемая/Уважаемый [Name]' as a new block - it's the host answering!",
                 "WRONG: Creating new block because host changed sub-topic",
-                "WRONG: Creating new block for every few utterances",
                 "WRONG: Inventing questions that aren't in the transcript",
             ],
         },
