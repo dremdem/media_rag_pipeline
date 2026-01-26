@@ -30,6 +30,9 @@ ENV EXPORTS_DIR=/app/exports
 # Default models: gpt-4o-mini for simple tasks, gpt-4o for complex block segmentation
 ENV OPENAI_MODEL=gpt-4o-mini
 ENV OPENAI_MODEL_BLOCKS=gpt-4o
+# Chunking config for large Q&A sections (to stay within API token limits)
+ENV CHUNK_SIZE=400
+ENV CHUNK_OVERLAP=30
 
 # Health check for Docker orchestration
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \

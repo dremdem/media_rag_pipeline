@@ -208,16 +208,22 @@ Retrieve stored detection result.
 | `OPENAI_API_KEY` | (required) | OpenAI API key |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Model for opinion detection and boundary detection |
 | `OPENAI_MODEL_BLOCKS` | `gpt-4o` | Model for block segmentation (Pass 2) - uses stronger model |
+| `CHUNK_SIZE` | `400` | Max utterances per chunk (for large Q&A sections) |
+| `CHUNK_OVERLAP` | `30` | Overlap between chunks to avoid boundary issues |
 | `MAX_TEXT_LENGTH` | `4000` | Max chars before truncation |
 | `LLM_ANALYZER_DB_PATH` | `data/analyzer.db` | SQLite database path |
 | `EXPORTS_DIR` | `exports` | Directory for JSON exports |
 
-### Model Selection
+### Model Selection & Chunking
 
 Block segmentation (Pass 2) uses a stronger model by default because:
 - Q&A sections can have 1000+ utterances (~50k tokens)
 - Complex rules for viewer name detection
 - Prevents over-segmentation (87 blocks → ~20 blocks)
+
+**Chunking:** For large Q&A sections (>400 utterances), the service automatically splits
+into chunks to stay within API token limits (30k TPM). Chunks are processed separately
+and merged, with overlap to avoid splitting blocks at chunk boundaries.
 
 **Cost impact:** Block segmentation with gpt-4o costs ~$0.02-0.05 per video (one-time per video).
 

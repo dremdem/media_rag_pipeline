@@ -71,6 +71,11 @@ OPENAI_MODEL_BLOCKS = os.environ.get("OPENAI_MODEL_BLOCKS", "gpt-4o")
 MAX_TEXT_LENGTH = int(os.environ.get("MAX_TEXT_LENGTH", "4000"))
 EXPORTS_DIR = Path(os.environ.get("EXPORTS_DIR", "exports"))
 
+# Chunking configuration for block segmentation
+# Each chunk should be ~12k tokens to stay well under 30k TPM limit
+CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "400"))  # utterances per chunk
+CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "30"))  # overlap utterances
+
 # Validate API key
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
@@ -406,28 +411,185 @@ def segment_boundaries(req: BoundaryRequest) -> BoundaryResponse:
     return BoundaryResponse(video_id=req.video_id, segments=segments)
 
 
+# --- Chunking Helpers for Block Segmentation ---
+
+
+def _process_single_chunk(
+    utterances: list[Utterance],
+    chunk_start_u: int,
+    chunk_end_u: int,
+) -> list[QABlock]:
+    """Process a single chunk of utterances and return blocks.
+
+    Args:
+        utterances: List of utterances in this chunk
+        chunk_start_u: Start utterance index for this chunk
+        chunk_end_u: End utterance index for this chunk
+
+    Returns:
+        List of QABlock objects for this chunk
+    """
+    qa_range = {"start_u": chunk_start_u, "end_u": chunk_end_u}
+
+    prompt = build_blocks_prompt(utterances, qa_range)
+    try:
+        data = _call_openai_json(prompt, SYSTEM_PROMPT_SEGMENTATION, model=OPENAI_MODEL_BLOCKS)
+    except Exception as e:
+        logger.error(f"OpenAI API error for chunk [{chunk_start_u}-{chunk_end_u}]: {e}")
+        raise
+
+    raw_blocks = data.get("qa_blocks", [])
+    blocks = _validate_blocks(raw_blocks, chunk_start_u, chunk_end_u)
+
+    return blocks
+
+
+def _merge_chunk_blocks(
+    all_chunk_blocks: list[list[QABlock]],
+    chunk_boundaries: list[tuple[int, int]],
+    overlap: int,
+) -> list[QABlock]:
+    """Merge blocks from multiple chunks, handling overlaps.
+
+    Strategy:
+    - For overlapping regions, prefer the block from the earlier chunk
+      (it has more context before the boundary)
+    - Adjust block boundaries to avoid gaps
+
+    Args:
+        all_chunk_blocks: List of block lists, one per chunk
+        chunk_boundaries: List of (start_u, end_u) for each chunk
+        overlap: Number of overlapping utterances between chunks
+
+    Returns:
+        Merged list of QABlock objects
+    """
+    if not all_chunk_blocks:
+        return []
+
+    if len(all_chunk_blocks) == 1:
+        return all_chunk_blocks[0]
+
+    merged: list[QABlock] = []
+
+    for chunk_idx, chunk_blocks in enumerate(all_chunk_blocks):
+        if not chunk_blocks:
+            continue
+
+        chunk_start, chunk_end = chunk_boundaries[chunk_idx]
+
+        # For first chunk, take all blocks
+        if chunk_idx == 0:
+            merged.extend(chunk_blocks)
+            continue
+
+        # For subsequent chunks, skip blocks that overlap with previous chunk
+        prev_chunk_end = chunk_boundaries[chunk_idx - 1][1]
+        overlap_start = chunk_start  # Start of overlap region
+
+        for block in chunk_blocks:
+            # Skip blocks that are entirely in the overlap region
+            # (they were already captured by the previous chunk)
+            if block.end_u <= prev_chunk_end - overlap // 2:
+                continue
+
+            # If block starts in overlap but extends beyond, adjust start
+            if block.start_u < prev_chunk_end - overlap // 2:
+                # This block spans the boundary - prefer keeping it from this chunk
+                # if it extends significantly into the new region
+                if block.end_u - prev_chunk_end > overlap // 2:
+                    merged.append(block)
+            else:
+                # Block is entirely in new region
+                merged.append(block)
+
+    # Sort by start_u and remove any duplicates/overlaps
+    merged.sort(key=lambda b: b.start_u)
+
+    # Remove overlapping blocks (prefer earlier ones)
+    final_blocks: list[QABlock] = []
+    for block in merged:
+        if not final_blocks:
+            final_blocks.append(block)
+        elif block.start_u > final_blocks[-1].end_u:
+            final_blocks.append(block)
+        elif block.start_u == final_blocks[-1].end_u + 1:
+            # Adjacent blocks - keep both
+            final_blocks.append(block)
+        # else: overlapping block, skip it
+
+    return final_blocks
+
+
 @app.post("/segment/qa/blocks", response_model=BlocksResponse)
 def segment_blocks(req: BlocksRequest) -> BlocksResponse:
     """Pass 2: Segment Q&A region into semantic answer blocks.
 
     Takes Q&A region utterances and returns semantic blocks.
+    For large Q&A regions (>CHUNK_SIZE utterances), uses chunking to
+    stay within API token limits.
+
     Results are persisted to SQLite.
     """
     if not req.utterances:
         raise HTTPException(status_code=400, detail="No utterances provided")
 
-    qa_range = {"start_u": req.qa_range.start_u, "end_u": req.qa_range.end_u}
+    num_utterances = len(req.utterances)
+    logger.info(f"Block segmentation for {num_utterances} utterances")
 
-    prompt = build_blocks_prompt(req.utterances, qa_range)
-    try:
-        # Use stronger model for block segmentation (complex task with ~50k tokens)
-        data = _call_openai_json(prompt, SYSTEM_PROMPT_SEGMENTATION, model=OPENAI_MODEL_BLOCKS)
-    except Exception as e:
-        logger.error(f"OpenAI API error for block segmentation: {e}")
-        raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+    # Check if chunking is needed
+    if num_utterances <= CHUNK_SIZE:
+        # Small enough to process in one call
+        qa_range = {"start_u": req.qa_range.start_u, "end_u": req.qa_range.end_u}
+        prompt = build_blocks_prompt(req.utterances, qa_range)
+        try:
+            data = _call_openai_json(prompt, SYSTEM_PROMPT_SEGMENTATION, model=OPENAI_MODEL_BLOCKS)
+        except Exception as e:
+            logger.error(f"OpenAI API error for block segmentation: {e}")
+            raise HTTPException(status_code=502, detail=f"LLM error: {e}")
 
-    raw_blocks = data.get("qa_blocks", [])
-    blocks = _validate_blocks(raw_blocks, req.qa_range.start_u, req.qa_range.end_u)
+        raw_blocks = data.get("qa_blocks", [])
+        blocks = _validate_blocks(raw_blocks, req.qa_range.start_u, req.qa_range.end_u)
+    else:
+        # Need to chunk the utterances
+        logger.info(f"Using chunking: {num_utterances} utterances > {CHUNK_SIZE} chunk size")
+
+        # Create chunks with overlap
+        chunks: list[list[Utterance]] = []
+        chunk_boundaries: list[tuple[int, int]] = []
+
+        i = 0
+        while i < num_utterances:
+            chunk_end_idx = min(i + CHUNK_SIZE, num_utterances)
+            chunk_utterances = req.utterances[i:chunk_end_idx]
+
+            if chunk_utterances:
+                chunk_start_u = chunk_utterances[0].u
+                chunk_end_u = chunk_utterances[-1].u
+                chunks.append(chunk_utterances)
+                chunk_boundaries.append((chunk_start_u, chunk_end_u))
+                logger.info(f"Chunk {len(chunks)}: utterances {chunk_start_u}-{chunk_end_u} ({len(chunk_utterances)} utts)")
+
+            # Move to next chunk, accounting for overlap
+            i += CHUNK_SIZE - CHUNK_OVERLAP
+            if i >= num_utterances:
+                break
+
+        # Process each chunk
+        all_chunk_blocks: list[list[QABlock]] = []
+        for chunk_idx, (chunk_utts, (chunk_start, chunk_end)) in enumerate(zip(chunks, chunk_boundaries)):
+            logger.info(f"Processing chunk {chunk_idx + 1}/{len(chunks)}")
+            try:
+                chunk_blocks = _process_single_chunk(chunk_utts, chunk_start, chunk_end)
+                all_chunk_blocks.append(chunk_blocks)
+                logger.info(f"Chunk {chunk_idx + 1} produced {len(chunk_blocks)} blocks")
+            except Exception as e:
+                logger.error(f"Error processing chunk {chunk_idx + 1}: {e}")
+                all_chunk_blocks.append([])  # Empty list for failed chunk
+
+        # Merge blocks from all chunks
+        blocks = _merge_chunk_blocks(all_chunk_blocks, chunk_boundaries, CHUNK_OVERLAP)
+        logger.info(f"Merged {sum(len(cb) for cb in all_chunk_blocks)} blocks into {len(blocks)} final blocks")
 
     if not blocks:
         blocks = [
