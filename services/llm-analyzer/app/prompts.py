@@ -4,6 +4,34 @@ This module contains prompt templates for:
 1. Opinion detection
 2. Q&A boundary segmentation (Pass 1)
 3. Q&A block segmentation (Pass 2)
+
+## Prompt Design Notes
+
+### Russian Political Commentary Videos
+
+The prompts are tuned for Russian-language political commentary/news videos
+where the host typically:
+1. Starts with news/analysis (narrative section)
+2. Transitions to answering viewer questions (Q&A section)
+
+### Key Transition Markers (Russian)
+
+Explicit transitions to Q&A:
+- "ответы на ваши вопросы" (answers to your questions)
+- "перейдём к вопросам" (let's move to questions)
+- "теперь вопросы" (now questions)
+
+Q&A indicators:
+- "[Имя], к вопросу о..." (addressing viewer by name)
+- "[Имя] пишет/спрашивает..." (viewer writes/asks)
+- "вопрос от [Имя]..." (question from viewer)
+
+### Why This Matters
+
+Without these markers, the LLM may:
+- Mark entire transcript as "narrative" (missing Q&A section)
+- Only detect Q&A at the very end (missing early transitions)
+- Miss transitions in the middle of long transcripts
 """
 
 import json
@@ -48,6 +76,9 @@ def build_boundary_prompt(utterances: list[Utterance]) -> str:
 
     The prompt instructs the LLM to identify where narrative content ends
     and Q&A content begins, returning utterance index ranges.
+
+    Key improvement: Includes Russian-specific transition markers and examples
+    to help detect Q&A sections in political commentary videos.
     """
     # Format utterances compactly for the prompt
     utterance_lines = []
@@ -59,8 +90,14 @@ def build_boundary_prompt(utterances: list[Utterance]) -> str:
     utterances_text = "\n".join(utterance_lines)
 
     payload = {
-        "task": "Segment this transcript into NARRATIVE and Q&A regions.",
+        "task": "Segment this Russian transcript into NARRATIVE and Q&A regions.",
         "language": "ru",
+        "context": (
+            "This is a Russian political commentary/news video. "
+            "The host typically starts with news/analysis (narrative), "
+            "then transitions to answering viewer questions (Q&A). "
+            "Look carefully for transition phrases in the MIDDLE of the transcript."
+        ),
         "definitions": {
             "narrative": (
                 "Monologue content: news, analysis, commentary, storytelling. "
@@ -68,8 +105,28 @@ def build_boundary_prompt(utterances: list[Utterance]) -> str:
             ),
             "qa": (
                 "Question-and-answer content: the speaker is answering viewer questions, "
-                "reading questions aloud, or explicitly addressing audience inquiries."
+                "reading comments, or addressing audience by name. "
+                "The speaker responds to specific people or their questions."
             ),
+        },
+        "transition_markers_ru": {
+            "description": "Common Russian phrases that signal transition to Q&A section:",
+            "explicit_transitions": [
+                "ответы на ваши вопросы",
+                "перейдём к вопросам",
+                "отвечу на вопросы",
+                "ваши вопросы и комментарии",
+                "перейти к ответам",
+                "теперь вопросы",
+            ],
+            "qa_indicators": [
+                "[Имя], к вопросу о... (addressing viewer by name)",
+                "[Имя] пишет/спрашивает... (viewer writes/asks)",
+                "вопрос от [Имя]... (question from viewer)",
+                "комментарий от [Имя]... (comment from viewer)",
+                "читаю комментарий... (reading a comment)",
+            ],
+            "note": "When you see these patterns, Q&A section has likely begun!",
         },
         "input": {
             "total_utterances": len(utterances),
@@ -90,11 +147,13 @@ def build_boundary_prompt(utterances: list[Utterance]) -> str:
         },
         "rules": [
             "Return ONLY valid JSON. No extra text.",
+            "IMPORTANT: Scan the ENTIRE transcript for transition markers, not just beginning/end!",
             "start_u and end_u MUST be valid utterance indices from the input.",
             "Segments MUST cover the entire range without gaps or overlaps.",
             "Segments MUST be ordered by start_u.",
             "If the entire transcript is narrative, return one segment with type='narrative'.",
             "If the entire transcript is Q&A, return one segment with type='qa'.",
+            "If you find a transition marker, the Q&A section starts AT or BEFORE that utterance.",
             "notes should be 1-2 sentences max, describing what happens in that segment.",
             "Do NOT invent text. Only use indices and short notes.",
         ],
@@ -117,8 +176,13 @@ def build_blocks_prompt(utterances: list[Utterance], qa_range: dict[str, int]) -
     utterances_text = "\n".join(utterance_lines)
 
     payload = {
-        "task": "Segment this Q&A transcript into semantic answer blocks.",
+        "task": "Segment this Russian Q&A transcript into semantic answer blocks.",
         "language": "ru",
+        "context": (
+            "This is the Q&A portion of a Russian political commentary video. "
+            "The host reads viewer questions/comments and responds to them. "
+            "Each block should represent one question-answer exchange."
+        ),
         "definitions": {
             "qa_block": (
                 "A continuous segment where the speaker answers one question OR "
@@ -129,6 +193,14 @@ def build_blocks_prompt(utterances: list[Utterance], qa_range: dict[str, int]) -
                 "The viewer's question being answered. May be read aloud by the speaker, "
                 "paraphrased, or implied from context. Extract if detectable."
             ),
+        },
+        "block_boundary_markers_ru": {
+            "description": "Signs that a new Q&A block is starting:",
+            "markers": [
+                "New viewer name mentioned (e.g., 'Виктор пишет...', 'Анна спрашивает...')",
+                "Explicit topic change (e.g., 'Теперь о...', 'Следующий вопрос...')",
+                "New question being read (e.g., 'Вопрос от...', 'Ещё один вопрос...')",
+            ],
         },
         "input": {
             "qa_range": qa_range,
@@ -151,6 +223,7 @@ def build_blocks_prompt(utterances: list[Utterance], qa_range: dict[str, int]) -
             "start_u and end_u MUST be within the provided qa_range.",
             "Blocks MUST cover the entire Q&A range without gaps or overlaps.",
             "Blocks MUST be ordered by start_u.",
+            "Look for viewer names - each new name often signals a new block.",
             "questions array may be empty if the question is not detectable from transcript.",
             "answer_summary should be 1-2 sentences describing the main point of the answer.",
             "Do NOT generate fake question text. Only extract if clearly present.",

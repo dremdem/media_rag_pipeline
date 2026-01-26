@@ -325,3 +325,32 @@ Using `gpt-4o-mini` (~$0.15/1M input tokens, ~$0.60/1M output tokens):
 | `qa_boundary` | Stores narrative/Q&A segments |
 | `qa_block` | Stores semantic Q&A blocks |
 | `qa_export` | Caches JSON exports |
+
+---
+
+## Prompt Design
+
+The prompts in `app/prompts.py` are tuned for **Russian political commentary videos**.
+
+### Q&A Detection Markers
+
+The LLM looks for these Russian transition phrases:
+
+| Type | Examples |
+|------|----------|
+| **Explicit transitions** | "ответы на ваши вопросы", "перейдём к вопросам", "теперь вопросы" |
+| **Q&A indicators** | "[Имя] пишет...", "вопрос от [Имя]...", "[Имя], к вопросу о..." |
+| **Block boundaries** | New viewer name, "следующий вопрос...", topic change |
+
+### Why This Matters
+
+Without language-specific markers, the LLM may:
+- Mark entire transcript as "narrative" (missing Q&A)
+- Only detect Q&A at the very end
+- Miss transitions in long transcripts
+
+### Customization
+
+To adapt for other languages/formats, modify `app/prompts.py`:
+- `build_boundary_prompt()` - Pass 1: Narrative vs Q&A
+- `build_blocks_prompt()` - Pass 2: Semantic blocks
