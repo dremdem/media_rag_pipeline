@@ -109,15 +109,12 @@ uv run python src/transcribe.py "https://youtube.com/watch?v=VIDEO_ID"
 Send the Deepgram JSON to LLM Analyzer to split into narrative and Q&A regions:
 
 ```bash
-# Using the convenience endpoint that accepts raw Deepgram JSON
 VIDEO_ID="VIDEO_ID"
 
-curl -X POST "http://localhost:8001/segment/qa/from-deepgram" \
+# Simple file upload using curl's @file syntax
+curl -X POST "http://localhost:8001/segment/qa/from-deepgram-file?video_id=$VIDEO_ID" \
   -H "Content-Type: application/json" \
-  -d "{
-    \"video_id\": \"$VIDEO_ID\",
-    \"deepgram_json\": $(cat data/transcripts/$VIDEO_ID.json)
-  }" | jq .
+  -d @data/transcripts/$VIDEO_ID.json | jq .
 ```
 
 **Output:**
@@ -238,10 +235,10 @@ VIDEO_ID="VIDEO_ID"
 # 1. Transcribe
 uv run python src/transcribe.py "https://youtube.com/watch?v=$VIDEO_ID"
 
-# 2. Segment
-SEGMENTS=$(curl -s -X POST "http://localhost:8001/segment/qa/from-deepgram" \
+# 2. Segment (using simple @file syntax)
+SEGMENTS=$(curl -s -X POST "http://localhost:8001/segment/qa/from-deepgram-file?video_id=$VIDEO_ID" \
   -H "Content-Type: application/json" \
-  -d "{\"video_id\": \"$VIDEO_ID\", \"deepgram_json\": $(cat data/transcripts/$VIDEO_ID.json)}")
+  -d @data/transcripts/$VIDEO_ID.json)
 
 echo "$SEGMENTS" | jq '.qa_blocks | length'  # Number of Q&A blocks
 
@@ -277,7 +274,7 @@ done
 | Service | Health Check | Main Endpoint |
 |---------|--------------|---------------|
 | NER | `GET /healthz` | `POST /ner/persons` |
-| LLM Analyzer | `GET /healthz` | `POST /segment/qa/from-deepgram` |
+| LLM Analyzer | `GET /healthz` | `POST /segment/qa/from-deepgram-file` |
 | Qdrant | `GET /` | `POST /collections/{name}/points/search` |
 
 ### Pipeline Order

@@ -87,19 +87,22 @@ uvicorn app.main:app --reload --port 8001
 
 ### Q&A Segmentation
 
-#### `POST /segment/qa/from-deepgram` (Recommended)
+#### `POST /segment/qa/from-deepgram-file` (Recommended)
 
-**Process raw Deepgram JSON directly.** This is the easiest way to segment a transcript.
+**Process raw Deepgram JSON file directly.** This is the easiest way to segment a transcript.
+
+Video ID is passed as a query parameter, and the Deepgram JSON file is sent as the request body using curl's `@file` syntax:
 
 ```bash
 VIDEO_ID="x5wmGSAmUQA"
-curl -X POST "http://localhost:8001/segment/qa/from-deepgram" \
+curl -X POST "http://localhost:8001/segment/qa/from-deepgram-file?video_id=$VIDEO_ID" \
   -H "Content-Type: application/json" \
-  -d "{
-    \"video_id\": \"$VIDEO_ID\",
-    \"deepgram_json\": $(cat data/transcripts/$VIDEO_ID.json)
-  }"
+  -d @data/transcripts/$VIDEO_ID.json
 ```
+
+#### `POST /segment/qa/from-deepgram`
+
+Alternative endpoint for programmatic use where JSON is constructed in code (video_id and deepgram_json in request body).
 
 **Response:**
 ```json
@@ -218,11 +221,11 @@ Retrieve stored detection result.
 # 1. Transcribe video (creates data/transcripts/VIDEO_ID.json)
 uv run python src/transcribe.py "https://youtube.com/watch?v=VIDEO_ID"
 
-# 2. Segment into Q&A blocks
+# 2. Segment into Q&A blocks (simple @file syntax)
 VIDEO_ID="VIDEO_ID"
-SEGMENTS=$(curl -s -X POST "http://localhost:8001/segment/qa/from-deepgram" \
+SEGMENTS=$(curl -s -X POST "http://localhost:8001/segment/qa/from-deepgram-file?video_id=$VIDEO_ID" \
   -H "Content-Type: application/json" \
-  -d "{\"video_id\": \"$VIDEO_ID\", \"deepgram_json\": $(cat data/transcripts/$VIDEO_ID.json)}")
+  -d @data/transcripts/$VIDEO_ID.json)
 
 # 3. For each Q&A block, run NER then Opinion Detection
 echo "$SEGMENTS" | jq -c '.qa_blocks[]' | while read block; do
@@ -259,10 +262,11 @@ import json
 with open("data/transcripts/VIDEO_ID.json") as f:
     deepgram_json = json.load(f)
 
-# 1. Segment
+# 1. Segment (using file endpoint with query param)
 segments = httpx.post(
-    "http://localhost:8001/segment/qa/from-deepgram",
-    json={"video_id": "VIDEO_ID", "deepgram_json": deepgram_json},
+    "http://localhost:8001/segment/qa/from-deepgram-file",
+    params={"video_id": "VIDEO_ID"},
+    json=deepgram_json,
 ).json()
 
 # 2. Process each Q&A block

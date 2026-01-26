@@ -16,7 +16,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Query
 from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -578,6 +578,28 @@ def segment_from_deepgram(req: DeepgramSegmentRequest) -> SegmentsResponse:
     utterances = _extract_utterances_from_deepgram(req.deepgram_json)
 
     full_req = FullSegmentRequest(video_id=req.video_id, utterances=utterances)
+    return segment_full(full_req)
+
+
+@app.post("/segment/qa/from-deepgram-file", response_model=SegmentsResponse)
+def segment_from_deepgram_file(
+    video_id: str = Query(..., description="Video identifier"),
+    deepgram_json: dict = Body(..., description="Raw Deepgram API response JSON"),
+) -> SegmentsResponse:
+    """Segment from raw Deepgram JSON file upload.
+
+    This endpoint is designed for easy file uploads via curl:
+
+        curl -X POST "http://localhost:8001/segment/qa/from-deepgram-file?video_id=VIDEO_ID" \\
+          -H "Content-Type: application/json" \\
+          -d @data/transcripts/VIDEO_ID.json
+
+    The video_id is passed as a query parameter, and the entire Deepgram JSON
+    file is sent as the request body using curl's @file syntax.
+    """
+    utterances = _extract_utterances_from_deepgram(deepgram_json)
+
+    full_req = FullSegmentRequest(video_id=video_id, utterances=utterances)
     return segment_full(full_req)
 
 
