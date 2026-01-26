@@ -332,7 +332,7 @@ Using `gpt-4o-mini` (~$0.15/1M input tokens, ~$0.60/1M output tokens):
 
 The prompts in `app/prompts.py` are tuned for **Russian political commentary videos**.
 
-### Q&A Detection Markers
+### Pass 1: Boundary Detection (Narrative vs Q&A)
 
 The LLM looks for these Russian transition phrases:
 
@@ -340,14 +340,30 @@ The LLM looks for these Russian transition phrases:
 |------|----------|
 | **Explicit transitions** | "ответы на ваши вопросы", "перейдём к вопросам", "теперь вопросы" |
 | **Q&A indicators** | "[Имя] пишет...", "вопрос от [Имя]...", "[Имя], к вопросу о..." |
-| **Block boundaries** | New viewer name, "следующий вопрос...", topic change |
+
+### Pass 2: Block Segmentation
+
+**Key principle:** ONE block = ONE viewer's question + host's COMPLETE answer.
+
+| Concept | Rule |
+|---------|------|
+| **New block starts** | When a NEW VIEWER NAME appears at start of utterance |
+| **Viewer name patterns** | "Виктор.", "Ольга,", "Андрей пишет:", "Поле из Сум." |
+| **NOT a new block** | Topic change, continuation words ("но", "и", "также") |
+| **Expected blocks** | ~15-30 for 1 hour Q&A (not 80+!) |
+
+**Question extraction:**
+- NEVER hallucinate questions
+- Only extract if LITERALLY quoted in transcript
+- If question not read aloud → use empty array `[]`
 
 ### Why This Matters
 
-Without language-specific markers, the LLM may:
+Without these rules, the LLM may:
 - Mark entire transcript as "narrative" (missing Q&A)
-- Only detect Q&A at the very end
-- Miss transitions in long transcripts
+- Over-segment into 80+ tiny blocks instead of ~20
+- Hallucinate questions unrelated to the actual text
+- Split host's answer across multiple blocks
 
 ### Customization
 

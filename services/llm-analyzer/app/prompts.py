@@ -32,6 +32,27 @@ Without these markers, the LLM may:
 - Mark entire transcript as "narrative" (missing Q&A section)
 - Only detect Q&A at the very end (missing early transitions)
 - Miss transitions in the middle of long transcripts
+
+### Q&A Block Segmentation (Pass 2)
+
+Key principle: ONE block = ONE viewer's question + host's COMPLETE answer.
+
+Block boundary detection:
+- NEW block starts ONLY when a NEW VIEWER NAME appears
+- Pattern: "[Имя]. ..." or "[Имя], ..." or "[Имя] пишет..."
+- Examples: "Виктор.", "Ольга,", "Андрей пишет:", "Поле из Сум."
+
+What is NOT a new block:
+- Topic change within the same answer
+- Host continuing reasoning (utterances with "но", "и", "также")
+- Host addressing viewer mid-answer ("уважаемая/уважаемый")
+
+Question extraction rules:
+- NEVER hallucinate questions
+- Only extract if LITERALLY quoted in transcript
+- If question not read aloud, use empty array []
+
+Expected blocks: ~15-30 for 1 hour of Q&A (not 80+!)
 """
 
 import json
@@ -165,7 +186,13 @@ def build_blocks_prompt(utterances: list[Utterance], qa_range: dict[str, int]) -
     """Build prompt for Pass 2: Q&A block segmentation.
 
     Given only the Q&A region utterances, split into semantic blocks
-    where each block represents one answered question (or bundle of questions).
+    where each block represents one viewer's question + the host's complete answer.
+
+    Key improvements:
+    - Detect viewer names as block boundaries
+    - Prevent over-segmentation (expect 15-30 blocks for 1h Q&A)
+    - Never hallucinate questions - only extract if literally quoted
+    - Include full answer in one block, even if spans many utterances
     """
     # Format utterances compactly
     utterance_lines = []
@@ -175,45 +202,107 @@ def build_blocks_prompt(utterances: list[Utterance], qa_range: dict[str, int]) -
 
     utterances_text = "\n".join(utterance_lines)
 
+    # Estimate expected block count (roughly 1 block per 2-4 minutes of Q&A)
+    total_duration = utterances[-1].end - utterances[0].start if utterances else 0
+    estimated_blocks = max(5, min(40, int(total_duration / 150)))  # ~2.5 min per block
+
     payload = {
         "task": "Segment this Russian Q&A transcript into semantic answer blocks.",
         "language": "ru",
         "context": (
             "This is the Q&A portion of a Russian political commentary video. "
-            "The host reads viewer questions/comments and responds to them. "
-            "Each block should represent one question-answer exchange."
+            "The host reads viewer questions/comments and gives COMPLETE answers. "
+            "One block = one viewer's question + the host's FULL answer (may span many utterances). "
+            "Do NOT split the host's answer into multiple blocks!"
         ),
-        "definitions": {
-            "qa_block": (
-                "A continuous segment where the speaker answers one question OR "
-                "a bundle of related questions. Each block should be semantically coherent - "
-                "it addresses one topic/question before moving to the next."
+        "critical_rules": {
+            "what_is_a_block": (
+                "ONE block = ONE viewer's question/comment + the host's COMPLETE answer. "
+                "The answer may be long (5-20 utterances) - that's still ONE block. "
+                "A new block starts ONLY when a NEW VIEWER is addressed."
             ),
-            "question": (
-                "The viewer's question being answered. May be read aloud by the speaker, "
-                "paraphrased, or implied from context. Extract if detectable."
+            "how_to_detect_new_block": (
+                "A NEW block starts when you see a NEW VIEWER NAME at the START of an utterance. "
+                "Pattern: '[Имя]. ...' or '[Имя], ...' or '[Имя] пишет/спрашивает...' "
+                "Examples: 'Виктор.', 'Ольга,', 'Андрей пишет:', 'Поле из Сум.' "
+                "If no new viewer name → it's the SAME block (continuation of answer)."
+            ),
+            "what_is_NOT_a_new_block": [
+                "Topic change within the same answer",
+                "Host saying 'уважаемая/уважаемый' mid-answer",
+                "Utterances starting with 'но', 'и', 'также', 'потому что'",
+                "Any continuation of the host's reasoning",
+            ],
+        },
+        "question_extraction_rules": {
+            "NEVER_HALLUCINATE": (
+                "CRITICAL: The 'questions' field must contain ONLY text that is "
+                "LITERALLY QUOTED in the transcript. If the viewer's question is not "
+                "read aloud by the host, leave questions array EMPTY []."
+            ),
+            "correct_examples": [
+                "Text: 'Виктор спрашивает: не Волков ли подтолкнул Навального?' → questions: ['не Волков ли подтолкнул Навального?']",
+                "Text: 'Ольга. Как вы относитесь к этому?' → questions: ['Как вы относитесь к этому?']",
+            ],
+            "incorrect_examples": [
+                "WRONG: Text about Lithuania → questions: ['околосмертные переживания'] (hallucinated!)",
+                "WRONG: Inventing a question that sounds related but isn't in the text",
+            ],
+            "when_to_leave_empty": (
+                "If the host just starts answering without reading the question, "
+                "or if the question is not clearly stated, use questions: []"
             ),
         },
-        "block_boundary_markers_ru": {
-            "description": "Signs that a new Q&A block is starting:",
-            "markers": [
-                "New viewer name mentioned (e.g., 'Виктор пишет...', 'Анна спрашивает...')",
-                "Explicit topic change (e.g., 'Теперь о...', 'Следующий вопрос...')",
-                "New question being read (e.g., 'Вопрос от...', 'Ещё один вопрос...')",
+        "expected_output": {
+            "block_count": f"For this transcript, expect approximately {estimated_blocks} blocks (±30%)",
+            "block_size": "Each block typically spans 5-30 utterances (the host's full answer)",
+            "warning": "If you have >50 blocks, you are over-segmenting! Merge blocks.",
+        },
+        "example_correct_segmentation": {
+            "description": "How blocks should look:",
+            "blocks": [
+                {
+                    "comment": "Block starts with viewer name 'Виктор'",
+                    "start_text": "Виктор, к вопросу о ФБК...",
+                    "spans": "15 utterances (host's full answer about FBK)",
+                    "questions": ["к вопросу о ФБК"],
+                },
+                {
+                    "comment": "NEW block because NEW viewer 'Ольга' appears",
+                    "start_text": "Ольга. Как вы относитесь к свободе слова?",
+                    "spans": "20 utterances (host's full answer about freedom of speech)",
+                    "questions": ["Как вы относитесь к свободе слова?"],
+                },
+                {
+                    "comment": "NEW block because NEW viewer 'Андрей' appears",
+                    "start_text": "Андрей пишет: поймал себя на мысли...",
+                    "spans": "10 utterances (host's response)",
+                    "questions": [],  # Question not clearly stated
+                },
+            ],
+        },
+        "example_incorrect_segmentation": {
+            "description": "What NOT to do:",
+            "mistakes": [
+                "WRONG: Splitting host's answer about Lithuania into 3 blocks",
+                "WRONG: Creating new block because host changed sub-topic",
+                "WRONG: Creating new block for every few utterances",
+                "WRONG: Inventing questions that aren't in the transcript",
             ],
         },
         "input": {
             "qa_range": qa_range,
             "total_utterances": len(utterances),
+            "estimated_blocks": estimated_blocks,
             "utterances": utterances_text,
         },
         "output_schema": {
             "qa_blocks": [
                 {
-                    "start_u": "integer (utterance index)",
-                    "end_u": "integer (utterance index, inclusive)",
-                    "questions": ["array of question strings if detectable, empty if not"],
-                    "answer_summary": "1-2 sentence summary of the answer",
+                    "start_u": "integer (utterance index where viewer name appears)",
+                    "end_u": "integer (last utterance of host's answer, inclusive)",
+                    "questions": "array of LITERAL quotes from transcript, or [] if not stated",
+                    "answer_summary": "1-2 sentence summary of what the host said",
                     "confidence": "number 0..1",
                 }
             ]
@@ -223,11 +312,12 @@ def build_blocks_prompt(utterances: list[Utterance], qa_range: dict[str, int]) -
             "start_u and end_u MUST be within the provided qa_range.",
             "Blocks MUST cover the entire Q&A range without gaps or overlaps.",
             "Blocks MUST be ordered by start_u.",
-            "Look for viewer names - each new name often signals a new block.",
-            "questions array may be empty if the question is not detectable from transcript.",
-            "answer_summary should be 1-2 sentences describing the main point of the answer.",
-            "Do NOT generate fake question text. Only extract if clearly present.",
-            "Do NOT copy long text into answer_summary. Keep it brief.",
+            "NEW BLOCK = NEW VIEWER NAME at start of utterance. Nothing else!",
+            "One viewer's question + host's FULL answer = ONE block (even if 20+ utterances).",
+            "questions array: ONLY literal quotes from transcript, or empty [].",
+            "NEVER invent or hallucinate questions. If unsure, use [].",
+            "answer_summary: Brief description of the host's response (1-2 sentences).",
+            f"Expected block count: ~{estimated_blocks}. If you have >50 blocks, merge them!",
         ],
     }
     return json.dumps(payload, ensure_ascii=False)
