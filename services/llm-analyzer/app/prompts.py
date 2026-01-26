@@ -269,25 +269,28 @@ def build_blocks_prompt(utterances: list[Utterance], qa_range: dict[str, int]) -
             "warning": "If you have >50 blocks, you are over-segmenting! Merge blocks.",
         },
         "example_correct_segmentation": {
-            "description": "How blocks should look:",
+            "description": "How blocks should look (note: answer_summary must be in Russian!):",
             "blocks": [
                 {
                     "comment": "Block starts with viewer name 'Виктор'",
                     "start_text": "Виктор, к вопросу о ФБК...",
                     "spans": "15 utterances (host's full answer about FBK)",
                     "questions": ["к вопросу о ФБК"],
+                    "answer_summary": "Ведущий обсуждает ситуацию в ФБК и возможных кандидатов на интервью.",
                 },
                 {
                     "comment": "NEW block because NEW viewer 'Ольга' appears",
                     "start_text": "Ольга. Как вы относитесь к свободе слова?",
                     "spans": "20 utterances (host's full answer about freedom of speech)",
                     "questions": ["Как вы относитесь к свободе слова?"],
+                    "answer_summary": "Ведущий объясняет границы свободы слова и почему оскорбления недопустимы.",
                 },
                 {
                     "comment": "NEW block because NEW viewer 'Андрей' appears",
                     "start_text": "Андрей пишет: поймал себя на мысли...",
                     "spans": "10 utterances (host's response)",
-                    "questions": [],  # Question not clearly stated
+                    "questions": [],
+                    "answer_summary": "Ведущий не видит сходства между упомянутыми скандалами и объясняет различия.",
                 },
             ],
         },
@@ -312,7 +315,7 @@ def build_blocks_prompt(utterances: list[Utterance], qa_range: dict[str, int]) -
                     "start_u": "integer (utterance index where viewer name appears)",
                     "end_u": "integer (last utterance of host's answer, inclusive)",
                     "questions": "array of LITERAL quotes from transcript, or [] if not stated",
-                    "answer_summary": "1-2 sentence summary of what the host said",
+                    "answer_summary": "1-2 sentence summary IN RUSSIAN (на русском языке) of what the host said",
                     "confidence": "number 0..1",
                 }
             ]
@@ -326,7 +329,7 @@ def build_blocks_prompt(utterances: list[Utterance], qa_range: dict[str, int]) -
             "One viewer's question + host's FULL answer = ONE block (even if 20+ utterances).",
             "questions array: ONLY literal quotes from transcript, or empty [].",
             "NEVER invent or hallucinate questions. If unsure, use [].",
-            "answer_summary: Brief description of the host's response (1-2 sentences).",
+            "answer_summary: Write IN RUSSIAN (на русском языке). Brief description of the host's response (1-2 sentences).",
             f"Expected block count: ~{estimated_blocks}. If you have >50 blocks, merge them!",
         ],
     }
