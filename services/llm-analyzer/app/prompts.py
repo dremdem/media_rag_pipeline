@@ -53,6 +53,16 @@ Question extraction rules:
 - If question not read aloud, use empty array []
 
 Expected blocks: ~15-30 for 1 hour of Q&A (not 80+!)
+
+### Model Selection
+
+- Pass 1 (boundaries): Uses OPENAI_MODEL (default: gpt-4o-mini)
+- Pass 2 (blocks): Uses OPENAI_MODEL_BLOCKS (default: gpt-4o)
+
+Block segmentation uses a stronger model because:
+- Large context (~50k tokens for long Q&A sections)
+- Complex viewer name detection rules
+- Requires better instruction following
 """
 
 import json

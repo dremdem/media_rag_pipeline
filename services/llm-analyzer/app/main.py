@@ -65,6 +65,9 @@ from .schemas import (
 
 # --- Configuration ---
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+# Use stronger model for complex block segmentation (Pass 2)
+# Block segmentation has ~50k tokens and requires better instruction following
+OPENAI_MODEL_BLOCKS = os.environ.get("OPENAI_MODEL_BLOCKS", "gpt-4o")
 MAX_TEXT_LENGTH = int(os.environ.get("MAX_TEXT_LENGTH", "4000"))
 EXPORTS_DIR = Path(os.environ.get("EXPORTS_DIR", "exports"))
 
@@ -95,6 +98,7 @@ def _startup() -> None:
     init_db()
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     logger.info(f"LLM Analyzer started with model: {OPENAI_MODEL}")
+    logger.info(f"Block segmentation model: {OPENAI_MODEL_BLOCKS}")
 
 
 # --- OpenAI Helpers ---
@@ -105,10 +109,23 @@ def _startup() -> None:
     wait=wait_exponential(multiplier=1, min=1, max=10),
     reraise=True,
 )
-def _call_openai_json(prompt: str, system_prompt: str) -> dict:
-    """Call OpenAI API with retry logic, returns parsed JSON dict."""
+def _call_openai_json(
+    prompt: str,
+    system_prompt: str,
+    model: str | None = None,
+) -> dict:
+    """Call OpenAI API with retry logic, returns parsed JSON dict.
+
+    Args:
+        prompt: User prompt to send
+        system_prompt: System prompt for the model
+        model: Optional model override. If None, uses OPENAI_MODEL default.
+    """
+    use_model = model or OPENAI_MODEL
+    logger.info(f"Calling OpenAI with model: {use_model}")
+
     resp = client.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=use_model,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
@@ -403,7 +420,8 @@ def segment_blocks(req: BlocksRequest) -> BlocksResponse:
 
     prompt = build_blocks_prompt(req.utterances, qa_range)
     try:
-        data = _call_openai_json(prompt, SYSTEM_PROMPT_SEGMENTATION)
+        # Use stronger model for block segmentation (complex task with ~50k tokens)
+        data = _call_openai_json(prompt, SYSTEM_PROMPT_SEGMENTATION, model=OPENAI_MODEL_BLOCKS)
     except Exception as e:
         logger.error(f"OpenAI API error for block segmentation: {e}")
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")

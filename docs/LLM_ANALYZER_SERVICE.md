@@ -206,10 +206,20 @@ Retrieve stored detection result.
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `OPENAI_API_KEY` | (required) | OpenAI API key |
-| `OPENAI_MODEL` | `gpt-4o-mini` | Model to use |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Model for opinion detection and boundary detection |
+| `OPENAI_MODEL_BLOCKS` | `gpt-4o` | Model for block segmentation (Pass 2) - uses stronger model |
 | `MAX_TEXT_LENGTH` | `4000` | Max chars before truncation |
 | `LLM_ANALYZER_DB_PATH` | `data/analyzer.db` | SQLite database path |
 | `EXPORTS_DIR` | `exports` | Directory for JSON exports |
+
+### Model Selection
+
+Block segmentation (Pass 2) uses a stronger model by default because:
+- Q&A sections can have 1000+ utterances (~50k tokens)
+- Complex rules for viewer name detection
+- Prevents over-segmentation (87 blocks → ~20 blocks)
+
+**Cost impact:** Block segmentation with gpt-4o costs ~$0.02-0.05 per video (one-time per video).
 
 ---
 

@@ -24,9 +24,12 @@ COPY app /app/app
 # Create data and exports directories
 RUN mkdir -p /app/data /app/exports
 
-# Set paths
+# Set paths and model defaults
 ENV LLM_ANALYZER_DB_PATH=/app/data/analyzer.db
 ENV EXPORTS_DIR=/app/exports
+# Default models: gpt-4o-mini for simple tasks, gpt-4o for complex block segmentation
+ENV OPENAI_MODEL=gpt-4o-mini
+ENV OPENAI_MODEL_BLOCKS=gpt-4o
 
 # Health check for Docker orchestration
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
