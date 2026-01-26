@@ -5,191 +5,195 @@
 ## Table of Contents
 
 - [Overview](#overview)
-- [Pipeline](#pipeline)
-  - [Data Ingestion](#data-ingestion)
-  - [Query Flow](#query-flow)
-  - [Opinion Extraction](#opinion-extraction)
+- [End-to-End Pipeline](#end-to-end-pipeline)
 - [Components](#components)
-  - [Transcription](#transcription)
+  - [Transcription (Deepgram)](#transcription-deepgram)
+  - [LLM Analyzer Service](#llm-analyzer-service)
   - [NER Service](#ner-service)
-  - [Opinion Detector Service](#opinion-detector-service)
-  - [Embeddings](#embeddings)
-  - [Vector Database](#vector-database)
-  - [Orchestration](#orchestration)
+  - [Vector Database (Qdrant)](#vector-database-qdrant)
+- [Directory Structure](#directory-structure)
+- [Environment Variables](#environment-variables)
 
 ---
 
 ## Overview
 
-The Media RAG Pipeline extracts transcripts from YouTube videos, generates embeddings, stores them in a vector database, and enables semantic search.
+The Media RAG Pipeline extracts and analyzes YouTube video transcripts to find and search opinions about persons.
 
 ```mermaid
 graph LR
-    A[YouTube Video] -->|Deepgram| B[Transcript]
-    B -->|OpenAI| C[Embeddings]
-    C -->|Store| D[(Qdrant)]
-    E[User Query] -->|OpenAI| F[Query Embedding]
-    F -->|Search| D
-    D -->|Results| G[Relevant Chunks]
+    A[YouTube Video] --> B[Transcribe]
+    B --> C[Segment]
+    C --> D[NER + Opinion]
+    D --> E[(Store)]
+    F[Query] --> E
+    E --> G[Results]
 ```
+
+**For step-by-step manual testing, see [PIPELINE_GUIDE.md](./PIPELINE_GUIDE.md)**
 
 ---
 
-## Pipeline
+## End-to-End Pipeline
 
-### Data Ingestion
-
-```mermaid
-graph TD
-    A[YouTube URL] -->|yt-dlp| B[Audio File]
-    B -->|Deepgram API| C[Transcript + Timestamps]
-    C -->|Text Splitter| D[Chunks]
-    D -->|OpenAI Embeddings| E[Vectors]
-    E -->|Store| F[(Qdrant Collection)]
-```
-
-**Steps:**
-1. Download audio from YouTube using `yt-dlp`
-2. Transcribe with Deepgram (word-level timestamps)
-3. Split transcript into chunks (800 chars, 120 overlap)
-4. Generate embeddings via OpenAI API
-5. Store vectors with metadata in Qdrant
-
-### Query Flow
+The complete pipeline from YouTube video to searchable opinions:
 
 ```mermaid
 graph TD
-    A[User Query] -->|OpenAI Embeddings| B[Query Vector]
-    B -->|Similarity Search| C[(Qdrant)]
-    C -->|Top-K Results| D[Relevant Chunks]
-    D -->|Return| E[Text + Metadata]
+    subgraph "1. Transcription"
+        A[YouTube URL] -->|yt-dlp| B[Audio MP3]
+        B -->|Deepgram API| C[JSON with Utterances]
+    end
+
+    subgraph "2. Segmentation"
+        C -->|LLM Analyzer| D[Narrative / Q&A Split]
+        D --> E[Q&A Semantic Blocks]
+    end
+
+    subgraph "3. Opinion Extraction"
+        E -->|NER Service| F{Has Persons?}
+        F -->|No| G[Skip]
+        F -->|Yes| H[LLM Analyzer]
+        H --> I[Opinions about Persons]
+    end
+
+    subgraph "4. Storage & Search"
+        I -->|Embeddings| J[(Qdrant)]
+        K[Query: opinions about X] --> J
+        J --> L[Results with Timestamps]
+    end
 ```
 
-**Steps:**
-1. Convert user query to embedding
-2. Search Qdrant for similar vectors
-3. Return top-k chunks with metadata (timestamps, source)
+### Pipeline Steps
 
-### Opinion Extraction
+| Step | Service | Port | Input | Output |
+|------|---------|------|-------|--------|
+| 1a | `src/transcribe.py` | - | YouTube URL | Audio MP3 |
+| 1b | Deepgram API | - | Audio MP3 | JSON with utterances |
+| 2 | LLM Analyzer | 8001 | Deepgram JSON | Q&A blocks |
+| 3a | NER Service | 8000 | Block text | persons[] |
+| 3b | LLM Analyzer | 8001 | Block + persons | has_opinion, targets |
+| 4a | `src/ingest.py` | - | Blocks + metadata | Embeddings |
+| 4b | Qdrant | 6333 | Embeddings | Stored vectors |
+| 5 | `src/query.py` | - | Search query | Relevant results |
 
-Three-stage pipeline to extract opinions about persons from transcript chunks:
+### Key Insight: Pipeline Order
 
-```mermaid
-graph LR
-    A[Transcript Chunks] -->|Every chunk| B[NER Service]
-    B -->|Has PERSON?| C{Filter}
-    C -->|No| D[Skip]
-    C -->|Yes| E[Opinion Detector]
-    E -->|has_opinion?| F{Filter}
-    F -->|No| G[Skip]
-    F -->|Yes| H[Store Result]
+```
+Transcribe → Segment → NER → Opinion → Store → Search
+                ↑
+    Segmentation happens BEFORE opinion detection!
 ```
 
-**Pipeline stages:**
-
-| Stage | Service | Port | Cost | Speed | Purpose |
-|-------|---------|------|------|-------|---------|
-| 1 | NER Service | 8000 | Free (local) | ~50ms | Detect person mentions |
-| 2 | Opinion Detector | 8001 | ~$0.001/chunk | ~1s | Detect if opinion exists |
-| 3 | (Optional) Extractor | - | ~$0.01/chunk | ~2s | Deep structured extraction |
-
-**Key distinction:**
-- **Mention** (NER): "Иванов встретился с Кузнецовым" → persons found, no opinion
-- **Opinion** (Detector): "Сидоров назвал Иванова некомпетентным" → opinion about Иванов
-
-This reduces costs by 50-80% through progressive filtering.
+Q&A Segmentation breaks the transcript into meaningful semantic blocks. Opinion detection then runs on each block (after NER finds persons). This ensures:
+- Opinions are associated with specific Q&A topics
+- Context is preserved for each answer
+- Search results have accurate timestamps
 
 ---
 
 ## Components
 
-### Transcription
+### Transcription (Deepgram)
 
-| Service | Purpose | Status |
-|---------|---------|--------|
-| **Deepgram** | Speech-to-text transcription | Active |
-| yt-dlp | YouTube audio download | Active |
+| Tool | Purpose |
+|------|---------|
+| `yt-dlp` | Download audio from YouTube |
+| Deepgram API | Speech-to-text with timestamps |
 
-**Deepgram Features Used:**
-- Model: `nova-3` (latest)
-- Smart formatting (dates, numbers, emails)
+**Usage:**
+```bash
+uv run python src/transcribe.py "https://youtube.com/watch?v=VIDEO_ID"
+# Creates: data/transcripts/VIDEO_ID.json
+```
+
+**Deepgram output contains:**
+- Full transcript text
 - Word-level timestamps
-- SRT subtitle generation
-- Optional speaker diarization
+- Utterances (used for segmentation)
+- Paragraphs (for SRT generation)
+
+---
+
+### LLM Analyzer Service
+
+| Capability | Endpoint | Purpose |
+|------------|----------|---------|
+| Q&A Segmentation | `POST /segment/qa/from-deepgram` | Split transcript into semantic blocks |
+| Opinion Detection | `POST /detect-opinion` | Detect opinions about persons |
+
+**Port:** 8001
+
+**Quick Start:**
+```bash
+cd services/llm-analyzer
+docker build -t llm-analyzer:latest .
+docker run --rm -p 8001:8001 \
+  -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+  llm-analyzer:latest
+```
+
+**Segmentation Example:**
+```bash
+curl -X POST "http://localhost:8001/segment/qa/from-deepgram" \
+  -H "Content-Type: application/json" \
+  -d "{\"video_id\": \"VIDEO_ID\", \"deepgram_json\": $(cat data/transcripts/VIDEO_ID.json)}"
+```
+
+See [LLM_ANALYZER_SERVICE.md](./LLM_ANALYZER_SERVICE.md) for details.
+
+---
 
 ### NER Service
 
-| Service | Model | Purpose | Status |
-|---------|-------|---------|--------|
-| **ru-person-ner** | `r1char9/ner-rubert-tiny-news` | Detect person mentions | Active |
+| Model | Purpose |
+|-------|---------|
+| `r1char9/ner-rubert-tiny-news` | Detect Russian person names |
 
-**Features:**
-- CPU-only (no GPU required)
-- ~50ms latency per chunk
-- Docker deployment
-- Health check endpoint (`/healthz`)
+**Port:** 8000
 
-**API Endpoint:**
+**Quick Start:**
+```bash
+cd services/ner
+docker build -t ner-service:latest .
+docker run --rm -p 8000:8000 ner-service:latest
 ```
-POST /ner/persons
-{
-  "text": "Иванов раскритиковал Петрова.",
-  "return_raw": false
-}
-→ {"persons": ["Иванов", "Петрова"], "has_persons": true}
+
+**Example:**
+```bash
+curl -X POST "http://localhost:8000/ner/persons" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Иванов раскритиковал Петрова."}'
+# {"persons": ["Иванов", "Петрова"], "has_persons": true}
 ```
 
 See [NER_SERVICE.md](./NER_SERVICE.md) for details.
 
-### Opinion Detector Service
+---
 
-| Service | Model | Purpose | Status |
-|---------|-------|---------|--------|
-| **opinion-detector** | `gpt-4o-mini` | Detect opinions about persons | Active |
+### Vector Database (Qdrant)
 
-**Features:**
-- OpenAI-powered classification
-- SQLite persistence for caching
-- Batch endpoint for efficiency
-- ~$0.001/chunk cost
+| Setting | Value |
+|---------|-------|
+| REST Port | 6333 |
+| gRPC Port | 6334 |
+| Collection | `mentions_mvp` |
+| Distance | Cosine |
 
-**API Endpoints:**
-```
-POST /detect-opinion      # Single chunk
-POST /detect-opinion/batch # Multiple chunks
-GET  /chunks/{chunk_id}   # Retrieve stored result
-GET  /healthz             # Health check
+**Quick Start:**
+```bash
+docker run --rm -p 6333:6333 -p 6334:6334 \
+  -v $(pwd)/qdrant_storage:/qdrant/storage \
+  qdrant/qdrant
 ```
 
-See [OPINION_DETECTOR_SERVICE.md](./OPINION_DETECTOR_SERVICE.md) for details.
+**Ingest & Query:**
+```bash
+uv run python src/ingest.py data/transcripts/VIDEO_ID.txt
+uv run python src/query.py "мнение о Иванове"
+```
 
-### Embeddings
-
-| Provider | Model | Dimensions | Status |
-|----------|-------|------------|--------|
-| **OpenAI** | `text-embedding-3-small` | 1,536 | Active |
-| OpenAI | `text-embedding-3-large` | 3,072 | Available |
-| Cohere | Embed API | - | Planned |
-| Hugging Face | Sentence-Transformers | - | Planned |
-
-### Vector Database
-
-| Database | Deployment | Status |
-|----------|------------|--------|
-| **Qdrant** | Docker (local) | Active |
-| Chroma | - | Planned |
-
-**Qdrant Configuration:**
-- Collection: `mentions_mvp`
-- Distance metric: Cosine similarity
-- Ports: 6333 (REST), 6334 (gRPC)
-
-### Orchestration
-
-| Tool | Purpose | Status |
-|------|---------|--------|
-| **LangChain** | Pipeline orchestration | Active |
-| python-dotenv | Environment management | Active |
+See [QDRANT_LOCAL_SETUP.md](./QDRANT_LOCAL_SETUP.md) for details.
 
 ---
 
@@ -198,24 +202,34 @@ See [OPINION_DETECTOR_SERVICE.md](./OPINION_DETECTOR_SERVICE.md) for details.
 ```
 media_rag_pipeline/
 ├── src/
-│   ├── ingest.py        # Ingest transcripts → Qdrant
-│   ├── query.py         # Query Qdrant
-│   └── transcribe.py    # YouTube → Deepgram → files
+│   ├── transcribe.py    # YouTube → Deepgram → JSON/SRT/TXT
+│   ├── ingest.py        # Chunks → Embeddings → Qdrant
+│   └── query.py         # Search Qdrant
+│
 ├── services/
-│   ├── ner/             # Russian PERSON-NER microservice (port 8000)
-│   │   ├── app/
-│   │   │   └── main.py
+│   ├── ner/             # Russian PERSON-NER (port 8000)
+│   │   ├── app/main.py
 │   │   └── Dockerfile
-│   └── opinion-detector/ # Opinion detection service (port 8001)
+│   │
+│   └── llm-analyzer/    # Segmentation + Opinion (port 8001)
 │       ├── app/
 │       │   ├── main.py
 │       │   ├── schemas.py
-│       │   └── db.py
+│       │   ├── db.py
+│       │   └── prompts.py
+│       ├── exports/     # JSON export files
 │       └── Dockerfile
+│
 ├── data/
-│   ├── transcripts/     # Transcripts, SRT, audio
-│   └── opinions/        # SQLite database (gitignored)
+│   ├── transcripts/     # Deepgram outputs (JSON, SRT, TXT)
+│   └── opinions/        # SQLite cache (gitignored)
+│
 ├── docs/                # Documentation
+│   ├── ARCHITECTURE.md  # This file
+│   ├── PIPELINE_GUIDE.md # Step-by-step testing
+│   ├── LLM_ANALYZER_SERVICE.md
+│   └── NER_SERVICE.md
+│
 └── qdrant_storage/      # Qdrant data (gitignored)
 ```
 
@@ -225,7 +239,13 @@ media_rag_pipeline/
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENAI_API_KEY` | Yes | OpenAI API for embeddings |
+| `OPENAI_API_KEY` | Yes | OpenAI API for LLM Analyzer and embeddings |
 | `DEEPGRAM_API_KEY` | Yes | Deepgram API for transcription |
 | `QDRANT_URL` | No | Qdrant URL (default: localhost:6333) |
 | `QDRANT_COLLECTION` | No | Collection name (default: mentions_mvp) |
+
+Create `.env` file in project root:
+```bash
+OPENAI_API_KEY=sk-...
+DEEPGRAM_API_KEY=...
+```

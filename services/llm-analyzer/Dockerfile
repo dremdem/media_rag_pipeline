@@ -21,11 +21,18 @@ RUN pip install --no-cache-dir \
 # Copy application
 COPY app /app/app
 
-# Create data directory for SQLite
-RUN mkdir -p /app/data
+# Create data and exports directories
+RUN mkdir -p /app/data /app/exports
 
-# Set database path
-ENV OPINION_DB_PATH=/app/data/opinions.db
+# Set paths and model defaults
+ENV LLM_ANALYZER_DB_PATH=/app/data/analyzer.db
+ENV EXPORTS_DIR=/app/exports
+# Default models: gpt-4o-mini for simple tasks, gpt-4o for complex block segmentation
+ENV OPENAI_MODEL=gpt-4o-mini
+ENV OPENAI_MODEL_BLOCKS=gpt-4o
+# Chunking config for large Q&A sections (to stay within API token limits)
+ENV CHUNK_SIZE=400
+ENV CHUNK_OVERLAP=30
 
 # Health check for Docker orchestration
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
