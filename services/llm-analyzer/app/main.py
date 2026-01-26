@@ -449,12 +449,14 @@ def _merge_chunk_blocks(
     chunk_boundaries: list[tuple[int, int]],
     overlap: int,
 ) -> list[QABlock]:
-    """Merge blocks from multiple chunks, handling overlaps.
+    """Merge blocks from multiple chunks, handling overlaps and gaps.
 
     Strategy:
-    - For overlapping regions, prefer the block from the earlier chunk
-      (it has more context before the boundary)
-    - Adjust block boundaries to avoid gaps
+    1. Collect all blocks from all chunks with chunk index
+    2. Sort by start_u
+    3. Remove duplicates (prefer block from earlier chunk for same start_u)
+    4. Handle overlaps (prefer earlier block)
+    5. Fill gaps by extending previous block's end_u
 
     Args:
         all_chunk_blocks: List of block lists, one per chunk
@@ -462,7 +464,7 @@ def _merge_chunk_blocks(
         overlap: Number of overlapping utterances between chunks
 
     Returns:
-        Merged list of QABlock objects
+        Merged list of QABlock objects with no gaps
     """
     if not all_chunk_blocks:
         return []
@@ -470,55 +472,65 @@ def _merge_chunk_blocks(
     if len(all_chunk_blocks) == 1:
         return all_chunk_blocks[0]
 
-    merged: list[QABlock] = []
-
+    # Collect all blocks with their chunk index
+    all_blocks_with_chunk: list[tuple[int, QABlock]] = []
     for chunk_idx, chunk_blocks in enumerate(all_chunk_blocks):
-        if not chunk_blocks:
-            continue
-
-        chunk_start, chunk_end = chunk_boundaries[chunk_idx]
-
-        # For first chunk, take all blocks
-        if chunk_idx == 0:
-            merged.extend(chunk_blocks)
-            continue
-
-        # For subsequent chunks, skip blocks that overlap with previous chunk
-        prev_chunk_end = chunk_boundaries[chunk_idx - 1][1]
-        overlap_start = chunk_start  # Start of overlap region
-
         for block in chunk_blocks:
-            # Skip blocks that are entirely in the overlap region
-            # (they were already captured by the previous chunk)
-            if block.end_u <= prev_chunk_end - overlap // 2:
-                continue
+            all_blocks_with_chunk.append((chunk_idx, block))
 
-            # If block starts in overlap but extends beyond, adjust start
-            if block.start_u < prev_chunk_end - overlap // 2:
-                # This block spans the boundary - prefer keeping it from this chunk
-                # if it extends significantly into the new region
-                if block.end_u - prev_chunk_end > overlap // 2:
-                    merged.append(block)
-            else:
-                # Block is entirely in new region
-                merged.append(block)
+    # Sort by start_u, then by chunk_idx (prefer earlier chunks)
+    all_blocks_with_chunk.sort(key=lambda x: (x[1].start_u, x[0]))
 
-    # Sort by start_u and remove any duplicates/overlaps
-    merged.sort(key=lambda b: b.start_u)
+    # Remove duplicates and handle overlaps
+    # Keep track of the last block's end_u to detect overlaps
+    merged: list[QABlock] = []
+    for chunk_idx, block in all_blocks_with_chunk:
+        if not merged:
+            merged.append(block)
+            continue
 
-    # Remove overlapping blocks (prefer earlier ones)
-    final_blocks: list[QABlock] = []
-    for block in merged:
-        if not final_blocks:
-            final_blocks.append(block)
-        elif block.start_u > final_blocks[-1].end_u:
-            final_blocks.append(block)
-        elif block.start_u == final_blocks[-1].end_u + 1:
-            # Adjacent blocks - keep both
-            final_blocks.append(block)
-        # else: overlapping block, skip it
+        last_block = merged[-1]
 
-    return final_blocks
+        # If this block starts after the last block ends, add it
+        if block.start_u > last_block.end_u:
+            merged.append(block)
+        # If this block starts at or before last block ends but extends further
+        elif block.end_u > last_block.end_u:
+            # This block overlaps but extends further - extend the last block
+            # Create a new block with extended end_u
+            merged[-1] = QABlock(
+                start_u=last_block.start_u,
+                end_u=block.end_u,
+                questions=last_block.questions,  # Keep questions from first block
+                answer_summary=last_block.answer_summary,
+                confidence=min(last_block.confidence, block.confidence),
+            )
+        # else: block is entirely contained in last block, skip it
+
+    # Fill gaps: if there's a gap between blocks, extend the previous block
+    if len(merged) > 1:
+        filled: list[QABlock] = [merged[0]]
+        for i in range(1, len(merged)):
+            prev_block = filled[-1]
+            curr_block = merged[i]
+
+            # Check for gap
+            if curr_block.start_u > prev_block.end_u + 1:
+                # Gap exists - extend previous block to fill it
+                gap_end = curr_block.start_u - 1
+                logger.info(f"Filling gap: extending block end from {prev_block.end_u} to {gap_end}")
+                filled[-1] = QABlock(
+                    start_u=prev_block.start_u,
+                    end_u=gap_end,
+                    questions=prev_block.questions,
+                    answer_summary=prev_block.answer_summary,
+                    confidence=prev_block.confidence,
+                )
+
+            filled.append(curr_block)
+        merged = filled
+
+    return merged
 
 
 @app.post("/segment/qa/blocks", response_model=BlocksResponse)
